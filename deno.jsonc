@@ -27,13 +27,14 @@
   "lock": false,
   "exports": {
     ".": "./mod.ts",
-    "./logtape": "./logtape.ts",
+    "./idle": "./idle.ts",
+    "./split": "./split.ts",
     "./deno.jsonc": "./deno.jsonc"
   },
   "imports": {
-    "@logtape/logtape": "jsr:@logtape/logtape@^0.4.2",
-    "@std/testing": "jsr:@std/testing@1",
-    "@libs/testing": "jsr:@libs/testing@2"
+    "@libs/testing": "jsr:@libs/testing@^2.2.3",
+    "@std/expect": "jsr:@std/expect@^1.0.0",
+    "@std/testing": "jsr:@std/testing@^1.0.0"
   },
   "tasks": {
     "test": "deno test --clean --trace-leaks",
