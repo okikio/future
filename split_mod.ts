@@ -4,21 +4,17 @@ import { test } from "@libs/testing";
 import { expect } from "@std/expect";
 
 // Test for split function
-test.only("deno")("split should correctly split valid values and errors", async () => {
+test("all")("split should correctly split valid values and errors", async () => {
   async function* sourceIterator() {
     yield 1;
     yield 2;
     yield new Error("This is an error");
+    yield 10;
     throw new Error("Something went wrong");
     return 5
   }
 
   const [resolved, errored] = split(sourceIterator());
-
-  // console.log({
-  //   resolved: await Array.fromAsync(resolved),
-  //   errored: await Array.fromAsync(errored),
-  // })
 
   // Collect resolved values
   const resolvedValues = await Array.fromAsync(resolved);
@@ -26,13 +22,8 @@ test.only("deno")("split should correctly split valid values and errors", async 
   // Collect errored values
   const erroredValues = await Array.fromAsync(errored);
 
-  console.log({
-    resolvedValues,
-    erroredValues
-  });
-
-  // expect(resolvedValues).toEqual([1, 2, new Error("This is an error")]);
-  // expect(erroredValues).toEqual([new Error("Something went wrong")]);
+  expect(resolvedValues).toEqual([1, 2, new Error("This is an error"), 10]);
+  expect(erroredValues).toEqual([new Error("Something went wrong")]);
 });
 
 // Test for splitBy function with predicate
@@ -45,22 +36,13 @@ test("all")("splitBy should correctly split based on predicate", async () => {
   }
 
   const isEven = (value: number) => value % 2 === 0;
-
   const [evens, odds] = splitBy<number>(sourceIterator(), isEven);
 
   // Collect even values
-  const evenValues = [];
-  // @ts-ignore a
-  for (let value of evens) {
-    evenValues.push(value);
-  }
+  const evenValues = await Array.fromAsync(evens);
 
   // Collect odd values
-  const oddValues = [];
-  // @ts-ignore a
-  for (let value of odds) {
-    oddValues.push(value);
-  }
+  const oddValues = await Array.fromAsync(odds);
 
   expect(evenValues).toEqual([2, 4]);
   expect(oddValues).toEqual([1, 3]);
@@ -74,30 +56,17 @@ test("all")("splitBy should handle errors correctly", async () => {
     yield new Error("This is an error");
   }
 
-  const handleErrors = (value: number) => {
-    try {
-      return value > 0; // Send positive values to the first iterator
-    } catch (error) {
-      return false; // Send errors to the second iterator
-    }
+  const handleErrors = (value: number | Error) => {
+    return typeof value === "number" && value > 0; // Send positive values to the first iterator
   };
 
-  // @ts-ignore a
-  const [resolved, errored] = await splitBy(sourceIterator(), handleErrors);
+  const [resolved, errored] = splitBy(sourceIterator(), handleErrors);
 
   // Collect resolved values
-  const resolvedValues = [];
-  // @ts-ignore a
-  for (let value of resolved) {
-    resolvedValues.push(value);
-  }
+  const resolvedValues = await Array.fromAsync(resolved);
 
   // Collect errored values
-  const erroredValues = [];
-  // @ts-ignore a
-  for (let error of errored) {
-    erroredValues.push(error);
-  }
+  const erroredValues = await Array.fromAsync(errored);
 
   expect(resolvedValues).toEqual([1, 2]);
   expect(erroredValues).toEqual([new Error("This is an error")]);

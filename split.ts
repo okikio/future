@@ -4,18 +4,34 @@
  * This function allows both sub-iterators to independently pull values from the source when they need them.
  * Valid values go to the first iterator, while errors encountered during the iteration process (not yielded values) go to the second iterator.
  *
- * ### Synchronization
- * The sub-iterators are synchronized using a shared state and explicit queues for valid values and errors. 
- * This ensures that the source iterator's values are only pulled once, and each sub-iterator can pull from its respective queue without busy waiting.
+ * ### How It Works
+ * - The function creates two queues: `validQueue` for valid values and `errorQueue` for errors.
+ * - As the source iterator is processed, values are placed into the appropriate queue.
+ * - Each sub-iterator pulls values from its corresponding queue, ensuring that valid values and errors are handled separately.
+ * 
+ * ### Iterator Behavior
+ * - An iterator is a protocol that allows you to traverse through a collection of values one by one.
+ * - In this case, `sourceIterator` is the source iterator, which yields values one at a time when its `next()` method is called.
+ * - If an error occurs during iteration (like a thrown exception), it's caught and placed in the `errorQueue`.
+ * - The `done` state indicates when the iterator has finished yielding all values.
  *
- * ### Deadlock Prevention
- * By using separate queues for valid values and errors, this method avoids deadlocks that could occur if one sub-iterator is stuck waiting for values while the other continues pulling.
+ * ### Error Handling
+ * - Errors encountered during iteration are caught in a `try-catch` block.
+ * - Only errors that occur during the iteration process are added to the `errorQueue`.
+ * - You can yield `Error` instances as valid values, they will be treated as such and not added to the error queue.
+ * - Errors are added to the `errorQueue`, while valid values continue to be processed.
+ * - The iteration only stops when the `done` flag is set to `true`.
+ *
+ * ### Why We Use Sets for Queues
+ * - `Set`s are used to store the results because they automatically handle uniqueness and provide efficient add and delete operations.
+ * - Values are deleted from the `Set` after being processed to avoid duplication and memory leaks.
  *
  * @template V The type of valid values being iterated over by the source.
  * @template E The type of errors encountered during the iteration process.
  * 
  * @param source The original source iterator or iterable to be split.
  * @returns An array containing two iterators: one for valid values and one for errors encountered during iteration.
+ * 
  * @example
  * ```ts
  * async function* sourceIterator() {
@@ -39,8 +55,11 @@
  * ```ts
  * // Handling errors and valid Error instances
  * async function* errorYieldingIterator() {
+ *   // Yielding an Error instance as a valid value 
  *   yield new Error("This is a valid error value");
  *   yield 42;
+ * 
+ *   // Throwing an error during iteration
  *   throw new Error("Iteration failed");
  * }
  *
@@ -83,92 +102,100 @@ export function split<V, E = unknown>(
   AsyncGenerator<V, V>,
   AsyncGenerator<E, E>,
 ] {
-  // Create a shared source iterator
+  // Create a shared source iterator that allows us to pull values from the source
   const sourceIterator =
     (source as AsyncIterable<V>)?.[Symbol.asyncIterator]?.() ??
     (source as Iterable<V>)?.[Symbol.iterator]?.() ??
     source as AsyncIterator<V>;
 
+  // Queues to hold valid values and errors separately
   const validQueue = new Set<IteratorResult<V>>();
   const errorQueue = new Set<IteratorResult<E>>();
 
-  // Shared state for managing iteration
-  const sharedState: {
-    done: boolean;
-    validQueue: Set<IteratorResult<V>>;
-    errorQueue: Set<IteratorResult<E>>;
-  } = {
+  // Shared state to manage the iteration process
+  const sharedState = {
     done: false,
     validQueue,
     errorQueue,
   };
 
   /**
-   * Helper function to create an async sub-iterator that pulls values based on whether they are valid or errors.
-   * @param sourceIterator The source iterator being processed.
-   * @param state The shared state containing the queues and done flag.
-   * @param type Whether this sub-iterator is for handling errors.
+   * Creates an async sub-iterator that pulls values from the source based on whether they are valid or errors.
+   * @param _sourceIterator The iterator providing values from the source.
+   * @param _state The shared state containing queues and flags for managing iteration.
+   * @param _type Indicates whether this sub-iterator is handling errors.
    */
   async function* createSubIterator<I>(
-    sourceIterator: AsyncIterator<V | E>,
-    state: typeof sharedState,
-    type: { error: boolean }
+    _sourceIterator: AsyncIterator<V | E>,
+    _state: typeof sharedState,
+    _type: { error: boolean }
   ): AsyncGenerator<I, I> {
     while (true) {
-      // Process the next item from the source if needed
-      if (!state.done && (
-        state.validQueue.size <= 0 ||
-        state.errorQueue.size <= 0
+      // Continue pulling values from the source until done or queues are populated
+      if (!_state.done && (
+        _state.validQueue.size <= 0 ||
+        _state.errorQueue.size <= 0
       )) {
         try {
-          const result = await sourceIterator.next();
-          state.validQueue.add(result as IteratorResult<V>);
+          // Pull the next value from the source iterator
+          const result = await _sourceIterator.next();
 
+          // Place valid values into the valid queue, it will automatically handle the termination of the iterator
+          _state.validQueue.add(result as IteratorResult<V>);
+
+          // Handle the end of iteration
           if (result.done) {
-            state.done = true;
-            state.errorQueue.add({ value: undefined, done: true } as IteratorResult<E>);
+            _state.done = true;
+
+            // Push the done message to the error queue so the iterator can terminate
+            _state.errorQueue.add({ value: undefined, done: true } as IteratorResult<E>);
           }
         } catch (error) {
-          state.errorQueue.add({ value: error as E, done: false } as IteratorResult<E>);
+          // Catch any error that occurs during iteration and add it to the error queue
+          _state.errorQueue.add({ value: error as E, done: false } as IteratorResult<E>);
         }
       }
 
-      // Get the next value from the appropriate queue
+      // Pull the next item from the appropriate queue
       let result: IteratorResult<V | E> | undefined;
-      if (type.error) {
-        result = state.errorQueue.values().next().value;
-        state.errorQueue.delete(result as IteratorResult<E>);
-
-        // If the result is done, return the final value
-        if (result?.done) return result?.value as I;
-
-        // Yield the error value, so long as there is one
-        if ((result?.value ?? null) !== null) {
-          // Yield the value if it's appropriate for this iterator
-          yield result?.value as I;
-        }
+      if (_type.error) {
+        // Handle errors
+        result = _state.errorQueue.values().next().value;
+        _state.errorQueue.delete(result as IteratorResult<E>); // Remove from the queue after processing
       } else {
-        result = state.validQueue.values().next().value;
-        state.validQueue.delete(result as IteratorResult<V>);
-
-        // Yield the value all the time
-        yield result?.value as I;
-
-        // If the result is done, return the final value
-        if (result?.done) {
-          return result?.value as I;
-        }
+        // Handle valid values
+        result = _state.validQueue.values().next().value;
+        _state.validQueue.delete(result as IteratorResult<V>); // Remove from the queue after processing
       }
+
+      // Skip if the result is null or undefined
+      // This can happen if the queue is empty or the iterator is done
+      if (!result) {
+        // If the iterator is done, return undefined
+        if (_state.done) return result as I; 
+        continue;
+      }
+
+      // If the iteration is complete, return the final value
+      if (result?.done) {
+        // Clear the queues if this is the last value
+        if (!_type.error) _state.validQueue.clear();
+        else _state.errorQueue.clear();
+
+        return result?.value as I;
+      }
+
+      // Yield the value if it's appropriate for this iterator (valid or error)
+      yield result?.value as I;
     }
   }
 
-  // Return two sub-iterators: one for valid results and one for iteration errors
+  // Return the two sub-iterators: one for valid values and one for errors
   return [
     createSubIterator<V>(sourceIterator, sharedState, { error: false }),
     createSubIterator<E>(sourceIterator, sharedState, { error: true }),
   ] as const;
 }
-
 
 /**
  * Splits a source iterator or iterable into two independent sub-iterators
@@ -176,21 +203,25 @@ export function split<V, E = unknown>(
  * that satisfy the predicate, while the second will pull values that do not
  * satisfy the predicate.
  *
- * ### Synchronization and Deadlock Handling
- * This function uses a shared state between the sub-iterators to ensure that
- * they can independently pull from the source without stepping on each other's toes.
- * However, synchronization issues could occur if the source iterator blocks or
- * produces results slowly, leading one sub-iterator to hang while waiting for
- * the other to finish processing a value.
+ * ### How It Works
+ * - This function creates two queues: `matchQueue` for values that satisfy the predicate and `nonMatchQueue` for values that do not.
+ * - As the source iterator is processed, values are placed into the appropriate queue based on whether they match the predicate.
+ * - Each sub-iterator pulls values from its corresponding queue, ensuring that values are processed independently based on the predicate.
+ * 
+ * ### Iterator Behavior
+ * - The source iterator yields values one at a time, and these are placed in either the `matchQueue` or the `nonMatchQueue` based on the predicate function.
+ * - The `done` state signals when the iterator has finished yielding all values, allowing each sub-iterator to terminate gracefully.
  *
- * Potential deadlocks could happen if one sub-iterator gets stuck in a state
- * where it cannot move forward, while the other keeps waiting for the shared
- * promise to resolve. These issues are managed by carefully resetting the shared
- * state after each result is processed and ensuring that both sub-iterators
- * check the shared state before attempting to pull from the source again.
+ * ### Error Handling
+ * - If an error occurs during iteration, it is thrown and will terminate the entire operation.
+ * - Values are added to their respective queues, and the iteration only stops when the `done` flag is set to `true`.
+ *
+ * ### Why We Use Sets for Queues
+ * - `Set`s are used to store the results because they automatically handle uniqueness and provide efficient add and delete operations.
+ * - Values are deleted from the `Set` after being processed to avoid duplication and memory leaks.
  *
  * @template T The type of values being iterated over by the source.
- * @template F The type of values being sent to the second iterator.
+ * @template F The type of values being directed to the second iterator.
  * 
  * @param source The original source iterator or iterable to be split.
  * @param predicate The predicate function that determines which values go to the first iterator.
@@ -298,58 +329,91 @@ export function splitBy<T, F = T>(
     (source as AsyncIterable<T | F>)?.[Symbol.asyncIterator]?.() ??
     (source as Iterable<T | F>)?.[Symbol.iterator]?.() ??
     source as AsyncIterator<T | F>;
+  
+  // Queues to hold values based on the predicate outcome
+  const trueQueue = new Set<IteratorResult<T>>();
+  const falseQueue = new Set<IteratorResult<F>>();
 
-  // Explicitly pass shared state through parameters
-  const sharedState: {
-    result?: IteratorResult<T | F>;
-    done: boolean;
-    resolvers: PromiseWithResolvers<IteratorResult<T | F>> | null;
-  } = {
+  // Shared state for managing the iteration process
+  const sharedState = {
     done: false,
-    resolvers: null,
+    trueQueue,
+    falseQueue,
   };
 
   /**
-   * Helper function to create an async sub-iterator that pulls values based on the predicate.
-   * @param predicateMatch Whether the iterator should yield values that match the predicate.
-   * @param state Shared state passed explicitly to manage the iteration.
+   * Creates an async sub-iterator that pulls values from the source based on the predicate.
+   * @param _sourceIterator The iterator providing values from the source.
+   * @param _state The shared state containing queues and flags for managing iteration.
+   * @param _type Indicates whether this sub-iterator is matching the predicate or not.
    */
   async function* createSubIterator<I>(
-    state: typeof sharedState,
-    predicateMatch: boolean,
+    _sourceIterator: AsyncIterator<T | F>,
+    _state: typeof sharedState,
+    _type: { match: boolean },
   ): AsyncGenerator<I, I> {
     while (true) {
-      // Check if the shared promise resolvers are initialized
-      if (!state.resolvers) {
-        state.resolvers = Promise.withResolvers<IteratorResult<T | F>>();
-        sourceIterator.next().then(state.resolvers.resolve).catch(state.resolvers.reject);
+      // Continue pulling values from the source until done or queues are populated
+      if (!_state.done && (_state.trueQueue.size <= 0 || _state.falseQueue.size <= 0)) {
+        // Pull the next value from the source iterator
+        const result = await sourceIterator.next();
+
+        // Check if the value matches the predicate
+        const match = await predicate(result.value);
+
+        // Place the result in the appropriate queue
+        if (match) {
+          _state.trueQueue.add(result as IteratorResult<T>);
+        } else {
+          _state.falseQueue.add(result as IteratorResult<F>);
+        }
+
+        // Handle the end of iteration
+        if (result.done) {
+          _state.done = true;
+
+          // Push the done message to the false queue so the iterator can terminate
+          _state.trueQueue.add({ value: undefined, done: true } as IteratorResult<T>);
+          _state.falseQueue.add({ value: undefined, done: true } as IteratorResult<F>);
+        }
       }
 
-      // Wait for the shared promise to resolve with the next value
-      const result = await state.resolvers.promise;
+      // Get the next value from the appropriate queue
+      let result: IteratorResult<T | F> | undefined;
 
-      // Clear the resolvers so the next iteration can create a new one
-      state.resolvers = null;
-
-      // If the iterator is done, return the final value
-      if (result.done) {
-        state.done = true;
-        return result.value as I;
+      if (_type.match) {
+        result = _state.trueQueue.values().next().value;
+        _state.trueQueue.delete(result as IteratorResult<T>); // Remove from queue after processing
+      } else {
+        result = _state.falseQueue.values().next().value;
+        _state.falseQueue.delete(result as IteratorResult<F>); // Remove from queue after processing
       }
 
-      // Check if the value matches the predicate
-      const matches = await predicate(result.value);
-
-      // Yield the value only if it matches the desired predicate outcome
-      if (matches === predicateMatch) {
-        yield result.value as I;
+      // Skip if the result is null or undefined
+      // This can happen if the queue is empty or the iterator is done
+      if (!result) {
+        // If the iterator is done, return undefined
+        if (_state.done) return result as I; 
+        continue;
       }
+
+      // If the result is done, return the final value
+      if (result?.done) {
+        // Clear the queues if this is the last value
+        if (_type.match) _state.trueQueue.clear();
+        else _state.falseQueue.clear();
+
+        return result?.value as I;
+      }
+
+      // Yield the value if it's appropriate for this iterator (match or non-match)
+      yield result?.value as I;
     }
   }
 
-  // Return two sub-iterators, one for true results and one for false results
+  // Return two sub-iterators: one for values that match the predicate and one for values that do not
   return [
-    createSubIterator<T>(sharedState, true),
-    createSubIterator<F>(sharedState, false),
+    createSubIterator<T>(sourceIterator, sharedState, { match: true }),
+    createSubIterator<F>(sourceIterator, sharedState, { match: false }),
   ] as const;
 }
