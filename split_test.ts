@@ -11,7 +11,6 @@ test("all")("split should correctly split valid values and errors", async () => 
     yield new Error("This is an error");
     yield 10;
     throw new Error("Something went wrong");
-    return 5
   }
 
   const [resolved, errored] = split(sourceIterator());
@@ -27,7 +26,7 @@ test("all")("split should correctly split valid values and errors", async () => 
 });
 
 // Test for splitBy function with predicate
-test("all")("splitBy should correctly split based on predicate", async () => {
+test.only("deno")("splitBy should correctly split based on predicate", async () => {
   async function* sourceIterator() {
     yield 1;
     yield 2;
@@ -43,6 +42,14 @@ test("all")("splitBy should correctly split based on predicate", async () => {
 
   // Collect odd values
   const oddValues = await Array.fromAsync(odds);
+
+  console.log({
+    evenValues,
+    oddValues,
+
+    new_evenValues: await Array.fromAsync(evens),
+    new_oddValues: await Array.fromAsync(odds),
+  })
 
   expect(evenValues).toEqual([2, 4]);
   expect(oddValues).toEqual([1, 3]);
