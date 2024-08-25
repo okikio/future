@@ -8,7 +8,6 @@
     "logtape",
     "esm"
   ],
-  "license": "MIT",
   "author": "okikio (Okiki Ojo)",
   "funding": "https://github.com/sponsors/okikio",
   "homepage": "https://github.com/okikio/logger",
