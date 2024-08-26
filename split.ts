@@ -96,7 +96,7 @@
  * }
  * ```
  */
-export function split<V, E = unknown>(
+export function splitIter<V, E = unknown>(
   source: AsyncIterable<V> | Iterable<V> | AsyncIterator<V> | Iterator<V>,
 ): readonly [
   AsyncGenerator<V, V>,
@@ -313,7 +313,7 @@ export function split<V, E = unknown>(
  * }
  * ```
  */
-export function splitBy<T, F = T>(
+export function splitIterBy<T, F = T>(
   source:
     | AsyncIterable<T | F>
     | Iterable<T | F>

@@ -1,4 +1,4 @@
-import { split, splitBy } from "./split.ts";
+import { splitIter, splitIterBy } from "./split.ts";
 
 import { test } from "@libs/testing";
 import { expect } from "@std/expect";
@@ -13,7 +13,7 @@ test("all")("split should correctly split valid values and errors", async () => 
     throw new Error("Something went wrong");
   }
 
-  const [resolved, errored] = split(sourceIterator());
+  const [resolved, errored] = splitIter(sourceIterator());
 
   // Collect resolved values
   const resolvedValues = await Array.fromAsync(resolved);
@@ -35,7 +35,7 @@ test.only("deno")("splitBy should correctly split based on predicate", async () 
   }
 
   const isEven = (value: number) => value % 2 === 0;
-  const [evens, odds] = splitBy<number>(sourceIterator(), isEven);
+  const [evens, odds] = splitIterBy<number>(sourceIterator(), isEven);
 
   // Collect even values
   const evenValues = await Array.fromAsync(evens);
@@ -67,7 +67,7 @@ test("all")("splitBy should handle errors correctly", async () => {
     return typeof value === "number" && value > 0; // Send positive values to the first iterator
   };
 
-  const [resolved, errored] = splitBy(sourceIterator(), handleErrors);
+  const [resolved, errored] = splitIterBy(sourceIterator(), handleErrors);
 
   // Collect resolved values
   const resolvedValues = await Array.fromAsync(resolved);
