@@ -1,5 +1,5 @@
 import { cancelIdle, idle } from "./idle.ts";
-import { isAsyncIterable, isAsyncIterator, isIterable } from "./utils.ts";
+import { isAsyncIterator, isIterator, isAsyncGenerator, isGenerator, isAsyncIterable, isIterable, isPromiseLike, isBuiltinIterable } from "./utils.ts";
 
 export class CancellationError extends Error {
   constructor() {
@@ -36,7 +36,7 @@ export type StatusEnum = typeof Status[keyof typeof Status];
  *
  * ### Simple Future Creation
  * ```typescript
- * const future = Future.fromOperation(async function* () {
+ * const future = Future.from(async function* () {
  *   yield 42; // Pauses and returns 42
  *   return 100; // Completes and returns 100
  * });
@@ -46,7 +46,7 @@ export type StatusEnum = typeof Status[keyof typeof Status];
  *
  * ### Pausing and Resuming
  * ```typescript
- * const future = Future.fromOperation(async function* () {
+ * const future = Future.from(async function* () {
  *   yield 1;
  *   yield 2;
  *   return 3;
@@ -62,7 +62,7 @@ export type StatusEnum = typeof Status[keyof typeof Status];
  *
  * ### Running in the Background
  * ```typescript
- * const backgroundFuture = Future.inBackground(Future.fromOperation(async function* () {
+ * const backgroundFuture = Future.inBackground(Future.from(async function* () {
  *   yield 1;
  *   return 2;
  * }));
@@ -72,14 +72,18 @@ export type StatusEnum = typeof Status[keyof typeof Status];
  * 
  * @template T - The type of the value that the future will resolve to.
  */
-export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLike<TReturn> {
-  #generator?: AsyncGenerator<T, TReturn, TNext> | null;
-  #operation?: ((signal: AbortSignal) => AsyncGenerator<T, TReturn, TNext>) | null;
+export class Future<T, TReturn = unknown, TNext = unknown>
+  // @ts-ignore Iterator is defined but ts doesn't recognize it yet
+  extends globalThis.Iterator
+  implements PromiseLike<T | TReturn> {
+  #generator?: ReturnType<FutureOperation<T, TReturn, TNext>> | null;
+  #operation?: FutureOperation<T, TReturn, TNext> | null;
   #status: StatusEnum = Status.Idle;
+  #abort: AbortController | null = new AbortController();
   readonly #resolvers = {
     pause: Promise.withResolvers<void>(),
-    complete: Promise.withResolvers<void>(),
-    abort: new AbortController(),
+    complete: Promise.withResolvers<T | TReturn | undefined>(),
+    abort: Promise.withResolvers<unknown>(),
   }
 
   static #EventHandler = class PrivateEventHandler<T, TReturn, TNext> {
@@ -105,23 +109,25 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * Creates a new `Future` instance.
    * @param operation - A function that returns an async generator to define the asynchronous task.
    */
-  constructor(operation: (signal: AbortSignal) => AsyncGenerator<T, TReturn, TNext>) {
+  constructor(operation: FutureOperation<T, TReturn, TNext>) {
+    super();
     this.#operation = operation;
     this.#setup();
 
-    this.#generator = this.#operation?.(this.#resolvers.abort?.signal);
+    this.#generator = this.#operation?.(this.#abort!);
   }
 
   #setup() {
-    this.#resolvers.abort?.signal?.removeEventListener?.("abort", this.#eventhandler);
+    this.#abort?.signal?.removeEventListener?.("abort", this.#eventhandler);
 
+    this.#abort = new AbortController();
     Object.assign(this.#resolvers, {
       pause: Promise.withResolvers<void>(),
       complete: Promise.withResolvers<void>(),
-      abort: new AbortController(),
+      abort: Promise.withResolvers<unknown>(),
     });
 
-    this.#resolvers.abort?.signal?.addEventListener?.("abort", this.#eventhandler);
+    this.#abort?.signal?.addEventListener?.("abort", this.#eventhandler);
     this.#resolvers.complete?.promise?.finally?.(() => (this.#status = Status.Completed));
 
     const rotatingResolver = () => {
@@ -137,13 +143,14 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
   #handleEvent(event: Event) {
     if (event.type === "abort") {
       this.#status = Status.Cancelled;
+      this.#resolvers.abort?.resolve?.(this.#reason);
       this.#resolvers?.pause?.reject?.(this.#reason);
       this.#resolvers?.complete?.reject?.(this.#reason);
     }
   }
 
   get #reason() {
-    return this.#resolvers.abort?.signal?.reason;
+    return this.#abort?.signal?.reason;
   }
 
   isCancelled() {
@@ -171,26 +178,36 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
   }
 
   paused() {
-    return this.#resolvers.pause.promise;
+    return this.#resolvers.pause?.promise;
   }
 
   completed() {
-    return this.#resolvers.complete.promise;
+    return this.#resolvers.complete?.promise;
+  }
+
+  cancelled() {
+    return this.#resolvers.abort?.promise;
+  }
+
+  complete(value: TReturn) {
+    // If the generator does not exist, resolve immediately with the provided value.
+    this.#resolvers.complete.resolve(value);
+    return this;
   }
 
   /**
    * Cancels the future, preventing further execution. 
    * @example
    * ```typescript
-   * const future = Future.fromOperation(async function* () {
+   * const future = Future.from(async function* () {
    *   yield 42;
    *   return 100;
    * });
    * future.cancel(); // Aborts future execution
    * ```
    */
-  cancel() {
-    this.#resolvers?.abort?.abort?.(new CancellationError());
+  cancel(reason: unknown = new CancellationError()) {
+    this.#abort?.abort?.(reason);
     return this;
   }
 
@@ -198,7 +215,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * Pauses the execution of the future.
    * @example
    * ```typescript
-   * const future = Future.fromOperation(async function* () {
+   * const future = Future.from(async function* () {
    *   yield 42;
    *   return 100;
    * });
@@ -216,7 +233,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * Resumes a paused future.
    * @example
    * ```typescript
-   * const future = Future.fromOperation(async function* () {
+   * const future = Future.from(async function* () {
    *   yield 42;
    *   return 100;
    * });
@@ -236,7 +253,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * @throws Error if the future is not complete.
    * @example
    * ```typescript
-   * const future = Future.fromOperation(async function* () {
+   * const future = Future.from(async function* () {
    *   yield 42;
    *   return 100;
    * });
@@ -254,14 +271,14 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
     }
 
     this.#setup();
-    this.#generator = this.#operation?.(this.#resolvers.abort?.signal);
+    this.#generator = this.#operation?.(this.#abort!);
     return this;
   }
 
   destroy() {
     this.cancel();
 
-    this.#resolvers.abort?.signal?.removeEventListener?.("abort", this.#eventhandler);
+    this.#abort?.signal?.removeEventListener?.("abort", this.#eventhandler);
     this.#eventhandler?.destroy?.();
 
     // @ts-ignore Resetting private properties
@@ -273,6 +290,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
       abort: null,
     });
 
+    this.#abort = null;
     this.#generator = null;
     this.#operation = null;
 
@@ -306,7 +324,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * @example Push-Based Workflow
    * ```typescript
    * // Push-based async generator example
-   * const future = Future.fromOperation(async function* () {
+   * const future = Future.from(async function* () {
    *   yield 1;
    *   yield 2;
    *   yield 3;
@@ -324,7 +342,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * @example Pull-Based Workflow
    * ```typescript
    * // Pull-based async generator example
-   * const future = Future.fromOperation(async function* () {
+   * const future = Future.from(async function* () {
    *   let result = { value: 1, done: false };
    *   
    *   // Wait for external input before proceeding
@@ -361,24 +379,41 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * 
    * @yields The values generated by the future.
    */
-  async *[Symbol.asyncIterator](): AsyncGenerator<T, TReturn, TNext> {
+  async *[Symbol.asyncIterator](): AsyncGenerator<T, T | TReturn, TNext> {
     let err: unknown;
+    let result: IteratorResult<T, T | TReturn> | undefined;
     try {
       if (!this.#generator || typeof this.#generator?.next !== "function") {
         throw new Error("generator not defined");
       }
 
-      // Prime the generator by starting the iteration process
-      let result = await this.#generator?.next?.();
+      if (this.isComplete()) {
+        const value = (await this.#resolvers.complete?.promise) ?? result?.value;
+        const finished = await this.#generator?.return?.(value as unknown as TReturn);
+        if (finished) return finished?.value;
+      }
 
+      // Prime the generator by starting the iteration process
+      result = await this.#generator?.next?.();
+      
       // Continue yielding values until the generator completes
       while (!result?.done) {
-        if (this.isCancelled()) throw this.#reason;
+        if (this.isCancelled()) {
+          await this.#generator?.throw?.(this.#reason);
+          throw this.#reason;
+        }
 
         // Handle pausing by awaiting the pause resolver
         if (this.isPaused()) {
           await this.#resolvers.pause?.promise;
           continue;
+        }
+
+        if (this.isComplete()) {
+          const value = (await this.#resolvers.complete?.promise) ?? result?.value;
+          const finished = await this.#generator?.return?.(value as unknown as TReturn);
+          if (finished) return finished?.value;
+          break;
         }
 
         // Set status to running
@@ -394,15 +429,20 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
       return result?.value;
     } catch (error) {
       // Handle errors during iteration
+      if (!this.isCancelled()) this.#abort?.abort?.(error);
       throw (err = error);
     } finally {
       // Resolve or reject based on the completion state
       if (err) this.#resolvers.complete?.reject?.(err);
-      else this.#resolvers.complete?.resolve?.();
+      else this.#resolvers.complete?.resolve?.(result?.value);
     }
   }
 
-  [Symbol.dispose]() { 
+  next(...args: [] | [TNext]): PromiseLike<IteratorResult<T, T | TReturn>> {
+    return this[Symbol.asyncIterator]()?.next?.(...args);
+  }
+
+  [Symbol.dispose]() {
     this.destroy();
   }
 
@@ -414,15 +454,15 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * If the generator does not have an explicit return, it will return undefined.
    * @example
    * ```typescript
-   * const future = Future.fromOperation(async function* () {
+   * const future = Future.from(async function* () {
    *   yield 42;
    *   // No explicit return, so the final result will be undefined
    * });
    * const result = await future.toPromise(); // result is undefined
    * ```
    */
-  async toPromise(): Promise<TReturn> {
-    let result: IteratorResult<T, TReturn>;
+  async toPromise(): Promise<T | TReturn> {
+    let result: IteratorResult<T, T | TReturn>;
     const generator = this[Symbol.asyncIterator]();
 
     // Iterate through the generator until completion
@@ -440,8 +480,8 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * @param onrejected Called when the future is rejected.
    * @returns A promise that resolves with the result of the future.
    */
-  then<TResult1 = TReturn, TResult2 = never>(
-    onfulfilled?: ((value: TReturn) => TResult1 | PromiseLike<TResult1>) | undefined | null, 
+  then<TResult1 = T | TReturn, TResult2 = never>(
+    onfulfilled?: ((value: T | TReturn) => TResult1 | PromiseLike<TResult1>) | undefined | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | undefined | null
   ): Promise<TResult1 | TResult2> {
     return this.toPromise().then(onfulfilled, onrejected);
@@ -454,7 +494,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    */
   catch<TResult = never>(
     onrejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | undefined | null
-  ): Promise<TReturn | TResult> {
+  ): Promise<T | TReturn | TResult> {
     return this.toPromise().catch(onrejected);
   }
 
@@ -463,7 +503,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * @param onfinally Called when the future is complete.
    * @returns A promise that resolves to the final result.
    */
-  finally(onfinally?: (() => void) | undefined | null): Promise<TReturn> {
+  finally(onfinally?: (() => void) | undefined | null): Promise<T | TReturn> {
     return this.toPromise().finally(onfinally);
   }
 
@@ -471,7 +511,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * Creates a `Future` from an operation, such as an async generator, a promise-like object, 
    * or any kind of iterable. This method converts different types of async tasks into a Future.
    * 
-   * ### What Does `fromOperation` Do?
+   * ### What Does `from` Do?
    * 
    * It takes an operation (which could be a promise, an iterator, an iterable, etc.) and wraps it 
    * inside a `Future`, making it possible to control its execution with pause/resume/cancel functionalities.
@@ -482,6 +522,11 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * - **AsyncIterable/Iterable**: Supports both async and sync iterables (like arrays or streams).
    * - **AsyncGenerator/Generator**: Handles both async and sync generators.
    * 
+   * @param operation The operation to convert into a Future. It could be a promise-like object, 
+   * a generator, an async generator, an iterator, or an iterable.
+   * 
+   * @returns A future representing the given operation.
+   * 
    * ### How It Works:
    * 
    * **Push-Based**:
@@ -490,7 +535,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * 
    * @example Push-Based Workflow:
    * ```typescript
-   * const future = Future.fromOperation(async function* () {
+   * const future = Future.from(async function* () {
    *   yield 1;
    *   yield 2;
    *   yield 3;
@@ -508,7 +553,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * 
    * @example Pull-Based Workflow:
    * ```typescript
-   * const future = Future.fromOperation(async function* () {
+   * const future = Future.from(async function* () {
    *   let result = { value: 1, done: false };
    *   
    *   while (!result.done) {
@@ -535,20 +580,15 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * 
    * ### Handling Different Types:
    * 
-   * @param operation The operation to convert into a Future. It could be a promise-like object, 
-   * a generator, an async generator, an iterator, or an iterable.
-   * 
-   * @returns {Future<T>} A future representing the given operation.
-   * 
    * @example Handling a simple promise-like operation:
    * ```typescript
-   * const future = Future.fromOperation(Promise.resolve(42));
+   * const future = Future.from(Promise.resolve(42));
    * const result = await future.toPromise(); // result is 42
    * ```
    * 
    * @example Handling a synchronous iterable (like an array):
    * ```typescript
-   * const future = Future.fromOperation([1, 2, 3]);
+   * const future = Future.from([1, 2, 3]);
    * for await (const value of future) {
    *   console.log(value); // Logs 1, 2, and 3
    * }
@@ -556,7 +596,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * 
    * @example Handling an async generator:
    * ```typescript
-   * const future = Future.fromOperation(async function* () {
+   * const future = Future.from(async function* () {
    *   yield 1;
    *   yield 2;
    *   yield 3;
@@ -568,7 +608,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * 
    * @example Handling an async generator with a pull-based workflow:
    * ```typescript
-   * const future = Future.fromOperation(async function* (signal: AbortSignal) {
+   * const future = Future.from(async function* (abort: AbortController) {
    *   const initialResult = { value: 1, done: false };
    *   let result = initialResult;
    *   
@@ -585,16 +625,24 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * ```
    * 
    */
-  static fromOperation<T, TReturn, TNext>(
+  static from<T, TReturn = T, TNext = unknown>(operation: PromiseLike<T>): ReturnType<typeof Future.fromPromise<T>>;
+  static from<T, TReturn = T, TNext = unknown>(operation: ReadableStream<T>): ReturnType<typeof Future.fromStream<T>>;
+  static from<T, TReturn = T, TNext = unknown>(operation: AsyncIterable<T> | Iterable<T | PromiseLike<T>>): ReturnType<typeof Future.fromIterable<T, TReturn>>;
+  static from<T, TReturn = T, TNext = unknown>(operation: Iterable<T | PromiseLike<T>>): ReturnType<typeof Future.fromBuiltinIterable<T>>;
+  static from<T, TReturn = T, TNext = unknown>(operation: AsyncIterator<T, TReturn, TNext> | Iterator<T | PromiseLike<T>, TReturn | PromiseLike<TReturn>, TNext>): ReturnType<typeof Future.fromIterator<T, TReturn>>;
+  static from<T, TReturn = T, TNext = unknown>(operation: FutureFromOperation<T, TReturn, TNext>): ReturnType<typeof Future.fromOperation<T, TReturn, TNext>>;
+  static from<T, TReturn = T, TNext = unknown>(operation: Future<T, TReturn, TNext>): Future<T, TReturn, TNext>;
+  static from<T, TReturn = T, TNext = unknown>(operation: T): ReturnType<typeof Future.of<T>>;
+  static from<T, TReturn = T, TNext = unknown>(
     operation:
-      | ((signal: AbortSignal) => AsyncGenerator<T, TReturn, TNext> | Generator<T, TReturn, TNext> | PromiseLike<TReturn>)
-      | PromiseLike<TReturn>
+      | FutureFromOperation<T, TReturn, TNext>
       | Future<T, TReturn, TNext>
       | ReadableStream<T>
       | AsyncIterable<T>
-      | Iterable<T>
-      | Iterator<T, TReturn, TNext>
-      | AsyncIterator<T, TReturn, TNext>
+      | Iterable<T | PromiseLike<T>>
+      | Iterator<T | PromiseLike<T>, TReturn | PromiseLike<TReturn>, TNext>
+      | PromiseLike<T>
+      | T
   ) {
     // Handle Future instances directly
     if (operation instanceof Future) {
@@ -605,45 +653,87 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
     if (operation instanceof ReadableStream) {
       return Future.fromStream(operation);
     }
-    
-    if (typeof operation === "function") {
-      return new Future<T, TReturn, TNext>(async function* (signal: AbortSignal) {
-        const result = await operation(signal) as 
-          | AsyncGenerator<T, TReturn, TNext> 
-          | Generator<T, TReturn, TNext> 
-          | PromiseLike<TReturn>;
 
-        if (isAsyncIterable(result) || isIterable(result)) {
-          // Handle async iterable or iterable result
-          return yield* result as AsyncGenerator<T, TReturn, TNext>;
-        }
-
-        // Handle promise-like result or single value
-        yield result as T;
-        return result as TReturn;
-      });
+    if (isPromiseLike(operation)) {
+      return Future.fromPromise(operation);
     }
 
-    return new Future<T, TReturn, TNext>(async function* () {
-      const result = operation as
-        | AsyncIterable<T>
-        | Iterable<T>
-        | Iterator<T, TReturn, TNext>
-        | AsyncIterator<T, TReturn, TNext>;
-      if (isAsyncIterable(result) || isIterable(result)) {
-        return yield* result;
-      } else if (isAsyncIterator(result)) {
-        let iteratorResult = await result.next();
-        while (!iteratorResult.done) {
-          iteratorResult = await result.next(yield iteratorResult.value);
-        }
+    if (isAsyncIterator(operation) || isIterator(operation)) {
+      return Future.fromIterator(operation);
+    }
 
-        return iteratorResult.value;
+    // We skip arrays and strings as they are built-in iterables, but never return a value directly, so we await them.
+    if ((isAsyncIterable(operation) || isIterable(operation)) && !isBuiltinIterable(operation)) {
+      return Future.fromIterable(operation);
+    }
+
+    if (isBuiltinIterable(operation)) {
+      return Future.fromBuiltinIterable(operation);
+    }
+
+    if (typeof operation === "function") {
+      return Future.fromOperation(operation as FutureFromOperation<T, TReturn, TNext>);
+    }
+
+    return Future.of(operation);
+  }
+
+  static of<T>(value: T): Future<T, T> {
+    return new Future<T, T>(async function* () {
+      yield value;
+      return value;
+    });
+  }
+
+  static fromPromise<T>(promise: PromiseLike<T>): Future<T, T> {
+    return new Future<T, T>(async function* () {
+      yield promise;
+      return promise;
+    });
+  }
+
+  static fromOperation<T, TReturn = T, TNext = unknown>(operation: FutureFromOperation<T, TReturn, TNext>) {
+    return new Future<T, TReturn, TNext>(async function* (abort: AbortController) {
+      const result = operation(abort);
+
+      if (isAsyncGenerator(result) || isGenerator(result)) {
+        // Handle async iterable or iterable result
+        return yield* result;
       }
 
-      // Yield a single value from the resolved promise
-      yield operation as T;
-      return operation as TReturn;
+      if (isBuiltinIterable(result)) {
+        // Handle built-in iterable result
+        yield* result as Iterable<T | PromiseLike<T>>;
+        return result as TReturn;
+      }
+
+      // Handle promise-like result or single value
+      yield result;
+      return result as TReturn;
+    });
+  }
+
+  static fromIterable<T, TReturn = T>(iterable: AsyncIterable<T> | Iterable<T | PromiseLike<T>>): Future<T, TReturn> {
+    return new Future<T, TReturn>(async function* () {
+      return yield* iterable;
+    });
+  }
+
+  static fromBuiltinIterable<T>(iterable: Iterable<T | PromiseLike<T>>): Future<T, Iterable<T | PromiseLike<T>>> {
+    return new Future<T, Iterable<T | PromiseLike<T>>>(async function* () {
+      yield* iterable;
+      return iterable;
+    });
+  }
+
+  static fromIterator<T, TReturn = T, TNext = unknown>(iterator: AsyncIterator<T, TReturn, TNext> | Iterator<T | PromiseLike<T>, TReturn | PromiseLike<TReturn>, TNext>): Future<T, TReturn> {
+    return new Future<T, TReturn, TNext>(async function* () {
+      let iteratorResult = await iterator.next();
+      while (!iteratorResult.done) {
+        iteratorResult = await iterator.next(yield iteratorResult.value);
+      }
+
+      return iteratorResult.value;
     });
   }
 
@@ -680,17 +770,17 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * }
    * ```
    */
-  static fromStream<T, TNext>(stream: ReadableStream<T>): Future<Awaited<T>, Awaited<T> | undefined, Awaited<Awaited<TNext>>> {
-    return new Future<Awaited<T>, Awaited<T> | undefined, Awaited<Awaited<TNext>>>(async function* () {
+  static fromStream<T>(stream: ReadableStream<T>): Future<T, undefined> {
+    return new Future<T, undefined>(async function* () {
       const reader = stream.getReader();
 
       try {
         while (true) {
           const { done, value } = await reader.read();
-          if (done) return value;
-          
+          if (done) break;
+
           // Yield each chunk of data
-          yield value; 
+          yield value;
         }
       } catch (error) {
         reader.cancel(error);
@@ -698,6 +788,8 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
       } finally {
         reader.releaseLock();
       }
+
+      return undefined;
     });
   }
 
@@ -710,8 +802,8 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * @param futures - An iterable of `Future` or `PromiseLike` objects.
    * @returns An AsyncIterable yielding each result as they complete.
    */
-  static all<T, TReturn, TNext>(futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<TReturn>>): Future<Awaited<TReturn>, Awaited<TReturn>[]> {
-    return new Future<Awaited<TReturn>, Awaited<TReturn>[]>(async function* () {
+  static all<T, TReturn, TNext>(futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<T | TReturn>>): Future<Awaited<T | TReturn>, Awaited<T | TReturn>[]> {
+    return new Future<Awaited<T | TReturn>, Awaited<T | TReturn>[]>(async function* () {
       // We trigger all futures at once, using Promise.all to await them concurrently.
       const results = await Promise.all(futures);
       yield* results;
@@ -728,11 +820,11 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * @example
    * ```typescript
    * const futureSettled = Future.allSettled([
-   *   Future.fromOperation(async function* () {
+   *   Future.from(async function* () {
    *     yield 42;
    *     return 100;
    *   }),
-   *   Future.fromOperation(async function* () {
+   *   Future.from(async function* () {
    *     yield 10;
    *     return 20;
    *   })
@@ -748,9 +840,9 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * ```
    */
   static allSettled<T, TReturn, TNext>(
-    futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<TReturn>>
-  ): Future<PromiseSettledResult<Awaited<TReturn>>, PromiseSettledResult<Awaited<TReturn>>[], undefined> {
-    return new Future<PromiseSettledResult<Awaited<TReturn>>, PromiseSettledResult<Awaited<TReturn>>[], undefined>(async function* () {
+    futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<T | TReturn>>
+  ): Future<PromiseSettledResult<T | TReturn>, PromiseSettledResult<T | TReturn>[]> {
+    return new Future<PromiseSettledResult<T | TReturn>, PromiseSettledResult<T | TReturn>[]>(async function* () {
       // We trigger all futures at once, using Promise.allSettled to await them concurrently.
       const results = await Promise.allSettled(futures);
       yield* results;
@@ -764,10 +856,10 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * @param futures - An iterable or async iterable of `Future` or `PromiseLike` objects.
    * @returns An AsyncIterable yielding the first result that resolves.
    */
-  static any<T, TReturn, TNext>(
-    futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<TReturn>>
-  ): Future<TReturn, TReturn, TNext> {
-    return new Future<TReturn, TReturn, TNext>(async function* () {
+  static race<T, TReturn, TNext>(
+    futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<T | TReturn>>
+  ): Future<T | TReturn, T | TReturn, TNext> {
+    return new Future<T | TReturn, T | TReturn, TNext>(async function* () {
       const result = Promise.race(futures);
       yield result;
       return result;
@@ -782,9 +874,9 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * @returns An AsyncIterable yielding the first `count` resolved results.
    */
   static some<T, TReturn, TNext>(
-    futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<TReturn>>,
+    futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<T | TReturn>>,
     count: number
-  ): Future<PromiseSettledResult<Awaited<TReturn>>, PromiseSettledResult<Awaited<TReturn>>[]> {
+  ): Future<PromiseSettledResult<T | TReturn>, PromiseSettledResult<T | TReturn>[]> {
     return Future.allSettled(
       Array.from(futures).slice(0, count)
     );
@@ -813,11 +905,11 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * 
    * ```typescript
    * const scopeFuture = Future.scope([
-   *   Future.fromOperation(async function* () {
+   *   Future.from(async function* () {
    *     yield 42;
    *     return 100;
    *   }),
-   *   Future.fromOperation(async function* () {
+   *   Future.from(async function* () {
    *     yield 10;
    *     return 20;
    *   })
@@ -828,7 +920,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * }
    * 
    * const pullFuture = Future.scope([
-   *   Future.fromOperation(async function* () {
+   *   Future.from(async function* () {
    *     let result = { value: 42, done: false };
    *     
    *     while (!result.done) {
@@ -880,19 +972,19 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * @returns A new `Future` instance set up for background execution.
    * @example
    * ```typescript
-   * const future = Future.fromOperation(async function* () {
+   * const future = Future.from(async function* () {
    *   yield 42;
    *   return 100;
    * });
    * const backgroundFuture = Future.inBackground(future); // result is 100, processed in the background
    * ```
    */
-  static inBackground<T, TReturn, TNext>(future: Future<T, TReturn, TNext>): Future<T, TReturn, TNext> {
+  static inBackground<T, TReturn, TNext>(future: Future<T, TReturn, TNext>): Future<T, T | TReturn, TNext> {
     // Check if the input is iterable
     const generator = future?.[Symbol.asyncIterator]?.();
 
     // Iterate over the iterable/async iterable futures in a controlled manner
-    return new Future<T, TReturn, TNext>(async function* () {
+    return new Future<T, T | TReturn, TNext>(async function* () {
       // If no valid iterator was found, throw an error indicating that the input is not iterable or an iterator
       if (
         (generator ?? null) === null ||
@@ -908,7 +1000,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
 
         // Handle the async generator or generator in a pull-based workflow
         let result = await generator.next();
-        
+
         idleResolver = Promise.withResolvers<void>();
         idleId = idle(() => idleResolver?.resolve?.());
 
@@ -918,7 +1010,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
           cancelIdle(idleId);
 
           result = await generator.next(yield result.value);
-        
+
           idleResolver = Promise.withResolvers<void>();
           idleId = idle(() => idleResolver?.resolve?.());
         }
@@ -947,11 +1039,11 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    *   Promise.resolve(1),
    *   Promise.resolve(2),
    *   Promise.resolve(3),
-   *   Future.fromOperation(async function* () {
+   *   Future.from(async function* () {
    *     yield 42;
    *     return 100;
    *   }),
-   *   Future.fromOperation(async function* () {
+   *   Future.from(async function* () {
    *     yield 10;
    *     return 20;
    *   })
@@ -978,14 +1070,14 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * ```
    */
   static withConcurrencyLimit<T, TReturn, TNext>(
-    futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<TReturn>>,
+    futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<T | TReturn>>,
     limit: number
-  ) {
+  ): Future<T | TReturn, T | TReturn | undefined, TNext> {
     // Check if the input is an async iterator, sync iterator, or iterable
     // We use Symbol.asyncIterator and Symbol.iterator to distinguish between different types
     const iterator = futures?.[Symbol.iterator]?.();
 
-    return new Future(async function* () {
+    return new Future<T | TReturn, T | TReturn | undefined, TNext>(async function* () {
       // If no valid iterator was found, throw an error indicating that the input is not iterable or an iterator
       if (
         (iterator ?? null) === null ||
@@ -993,10 +1085,10 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
       ) throw new TypeError("The provided input is not an iterable nor an iterator.");
 
       const activeFutures = new Map<
-        PromiseLike<TReturn>,
-        Promise<{ result: TReturn, promise: PromiseLike<TReturn> }>
+        PromiseLike<T | TReturn>,
+        Promise<{ result: T | TReturn, promise: PromiseLike<T | TReturn> }>
       >();
-      let finalResult: TReturn | undefined;
+      let finalResult: T | TReturn | undefined;
 
       while (activeFutures.size < limit) {
         const { done, value } = iterator.next();
@@ -1006,7 +1098,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
         const promise = value instanceof Future ? value.toPromise() : value;
 
         // Wrap the promise and store it in the map with the original promise as the key
-        activeFutures.set(promise, Promise.resolve(promise).then(result => ({ result, promise })));  
+        activeFutures.set(promise, Promise.resolve(promise).then(result => ({ result, promise })));
 
         // If we hit the concurrency limit, wait for one to resolve
         if (activeFutures.size >= limit) {
@@ -1028,7 +1120,6 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
     });
   }
 
-
   /**
    * Sets a deadline for a future, canceling it if it takes longer than the specified time to complete.
    * If the future resolves before the deadline, the timeout is cleared.
@@ -1038,7 +1129,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * @returns A future that will be canceled if it exceeds the specified time.
    * @example
    * ```typescript
-   * const future = Future.fromOperation(async function* () {
+   * const future = Future.from(async function* () {
    *   yield 42;
    *   return 100;
    * });
@@ -1046,32 +1137,30 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
    * const deadlineFuture = Future.withDeadline(future, 1000); // Sets a 1-second deadline
    * ```
    */
-  static withDeadline<T, TReturn, TNext>(future: Future<T, TReturn, TNext>, ms: number): Future<T, TReturn, TNext> {
-    return new Future<T, TReturn, TNext>(async function* () {
-      let timeoutId: ReturnType<typeof setTimeout>;
+  static withDeadline<T, TReturn, TNext>(future: Future<T, TReturn, TNext>, ms: number) {
+    return new Future<T | TReturn, T | TReturn, TNext>(async function* () {
+      const { promise: timeout, reject } = Promise.withResolvers<void>();
 
-      const timeout = new Promise<T>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          future.cancel();
-          reject(new Error("Future timed out"));
-        }, ms);
-      });
+      const timeoutId = setTimeout(() => {
+        future.cancel(new Error("Future timed out"));
+        reject(new Error("Future timed out"));
+      }, ms);
 
       const result = await Promise.race([future.toPromise(), timeout]);
-      if ((timeoutId! ?? null) !== null) clearTimeout(timeoutId!);  // Clear the timeout if the future resolves in time
-      
-      yield result as T;
-      return result as TReturn;
-    });  
+      clearTimeout(timeoutId);  // Clear the timeout if the future resolves in time
+
+      yield result as T | TReturn;
+      return result as T | TReturn;
+    });
   }
 
   /**
    * Provides resolvers for manually controlling the resolution of a future.
    * @returns An object containing the Future, the resolve and reject methods.
    */
-  static withResolvers<T, TReturn>(): FutureWithResolvers<T, TReturn> {
+  static withResolvers<TReturn>(): FutureWithResolvers<TReturn> {
     const { promise, resolve, reject } = Promise.withResolvers<TReturn>();
-    const future = Future.fromOperation<T, TReturn, undefined>(promise);
+    const future = Future.fromPromise(promise);
 
     return {
       future,
@@ -1081,10 +1170,18 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements PromiseLik
   }
 }
 
-
-
-export interface FutureWithResolvers<T, TReturn> extends Omit<PromiseWithResolvers<TReturn>, "promise"> {
-  future: Future<T, TReturn>;
+export interface FutureWithResolvers<TReturn> extends Omit<PromiseWithResolvers<TReturn>, "promise"> {
+  future: Future<TReturn, TReturn, undefined>;
   resolve: (value: TReturn | PromiseLike<TReturn>) => void;
   reject: (reason?: unknown) => void;
 }
+
+export interface FutureOperation<T, TReturn, TNext> {
+  (abort: AbortController): AsyncGenerator<T, TReturn, TNext> | Generator<T, TReturn, TNext>
+}
+
+export interface FutureFromOperation<T, TReturn, TNext> {
+  (abort: AbortController): ReturnType<FutureOperation<T, TReturn, TNext>> | PromiseLike<T> | T
+}
+
+export default Future;
