@@ -1,4 +1,4 @@
-import Future from "./mod.ts";
+import * as Future from "./mod.ts";
 
 const future = Future.from<number, string, undefined>(async function* () {
   let count = 0;
