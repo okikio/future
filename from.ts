@@ -143,10 +143,10 @@ export function from<T, TReturn = T, TNext = unknown>(
     | Iterator<T | PromiseLike<T>, TReturn | PromiseLike<TReturn>, TNext>
     | PromiseLike<T>
     | T
-) {
+) {  
   // Handle Future instances directly
-  if (operation instanceof Future) {
-    return operation;
+  if (is(operation)) {
+    return operation as Future<T, TReturn, TNext>;
   }
 
   // Handle ReadableStreams (common in web APIs)
@@ -192,7 +192,7 @@ export function fromPromise<T>(promise: PromiseLike<T>): Future<T, T> {
   });
 }
 
-export function fromOperation<T, TReturn = T, TNext = unknown>(operation: FutureFromOperation<T, TReturn, TNext>) {
+export function fromOperation<T, TReturn = T, TNext = unknown>(operation: FutureFromOperation<T, TReturn, TNext>): Future<T, TReturn, TNext> {
   return new Future<T, TReturn, TNext>(async function* (abort: AbortController) {
     const result = operation(abort);
 
@@ -291,4 +291,13 @@ export function fromStream<T>(stream: ReadableStream<T>): Future<T, undefined> {
 
     return undefined;
   });
+}
+
+/**
+ * Creates a new `Future` instance from an async generator function.
+ * @param value - A function that returns an async generator to define the asynchronous task.
+ * @returns A new `Future` instance.   * 
+ */
+export function is<T, TReturn = unknown, TNext = unknown>(value: unknown): value is Future<T, TReturn, TNext> {
+  return value instanceof Future;
 }
