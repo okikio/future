@@ -3,19 +3,23 @@ export function isPromiseLike<T>(obj: any): obj is PromiseLike<T> {
   return typeof obj?.then === "function";
 }
 
-export function isAsyncGenerator<T, TReturn, TNext>(obj: any): obj is AsyncGenerator<T, TReturn, TNext> {
+export function isAsyncGenerator<T, TReturn, TNext>(
+  obj: any,
+): obj is AsyncGenerator<T, TReturn, TNext> {
   return typeof obj?.[Symbol.asyncIterator] === "function" && (
-    typeof obj?.next === 'function' &&
-    typeof obj?.throw === 'function' &&
-    typeof obj?.return === 'function'
+    typeof obj?.next === "function" &&
+    typeof obj?.throw === "function" &&
+    typeof obj?.return === "function"
   );
 }
 
-export function isGenerator<T, TReturn, TNext>(obj: any): obj is Generator<T, TReturn, TNext> {
+export function isGenerator<T, TReturn, TNext>(
+  obj: any,
+): obj is Generator<T, TReturn, TNext> {
   return typeof obj?.[Symbol.iterator] === "function" && (
-    typeof obj?.next === 'function' &&
-    typeof obj?.throw === 'function' &&
-    typeof obj?.return === 'function'
+    typeof obj?.next === "function" &&
+    typeof obj?.throw === "function" &&
+    typeof obj?.return === "function"
   );
 }
 
@@ -29,13 +33,18 @@ export function isIterable<T>(obj: any): obj is Iterable<T> {
 
 export function isBuiltinIterable<T>(obj: any): obj is Iterable<T> {
   // @ts-ignore The Iterator class provides a [Symbol.iterator]() method that returns the iterator object itself, making the iterator also iterable. It also provides some helper methods for working with iterators. Typescript previously didn't respect this, but it seems in Typescript 5.6+ they will be adding the proper types for Iterator.
-  return isIterable(obj) && obj?.[Symbol.iterator]?.() instanceof globalThis?.Iterator;
+  return isIterable(obj) &&
+    obj?.[Symbol.iterator]?.() instanceof globalThis?.Iterator;
 }
 
-export function isAsyncIterator<T, TReturn, TNext>(obj: any): obj is AsyncIterator<T, TReturn, TNext> {
+export function isAsyncIterator<T, TReturn, TNext>(
+  obj: any,
+): obj is AsyncIterator<T, TReturn, TNext> {
   return typeof obj?.next === "function";
 }
 
-export function isIterator<T, TReturn, TNext>(obj: any): obj is Iterator<T, TReturn, TNext> {
+export function isIterator<T, TReturn, TNext>(
+  obj: any,
+): obj is Iterator<T, TReturn, TNext> {
   return typeof obj?.next === "function";
 }

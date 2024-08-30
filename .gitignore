@@ -143,3 +143,6 @@ bun.lockb
 
 # Vercel
 .vercel
+
+# Docs
+docs

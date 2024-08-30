@@ -26,8 +26,20 @@
   "lock": false,
   "exports": {
     ".": "./mod.ts",
+    "./future": "./future.ts",
+    "./from": "./from.ts",
+    "./scope": "./scope.ts",
+    "./background": "./background.ts",
+    "./concurrent": "./concurrent.ts",
+    "./resolvers": "./resolvers.ts",
+    "./deadline": "./deadline.ts",
+    "./errors": "./errors.ts",
     "./idle": "./idle.ts",
     "./split": "./split.ts",
+    "./channel": "./channel.ts",
+    "./iter": "./iter.ts",
+    "./utils": "./utils.ts",
+    "./status": "./status.ts",
     "./deno.jsonc": "./deno.jsonc"
   },
   "imports": {

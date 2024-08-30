@@ -1,4 +1,5 @@
-import { Future } from "./future.ts";
+import type { Future } from "./future.ts";
+import { fromPromise } from "./from.ts";
 
 /**
  * Provides resolvers for manually controlling the resolution of a future.
@@ -6,16 +7,17 @@ import { Future } from "./future.ts";
  */
 export function withResolvers<TReturn>(): FutureWithResolvers<TReturn> {
   const { promise, resolve, reject } = Promise.withResolvers<TReturn>();
-  const future = Future.fromPromise(promise);
+  const future = fromPromise(promise);
 
   return {
     future,
     resolve,
-    reject
+    reject,
   };
 }
 
-export interface FutureWithResolvers<TReturn> extends Omit<PromiseWithResolvers<TReturn>, "promise"> {
+export interface FutureWithResolvers<TReturn>
+  extends Omit<PromiseWithResolvers<TReturn>, "promise"> {
   future: Future<TReturn, TReturn, undefined>;
   resolve: (value: TReturn | PromiseLike<TReturn>) => void;
   reject: (reason?: unknown) => void;

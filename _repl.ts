@@ -1,77 +1,77 @@
 import * as Future from "./mod.ts";
 
-const future = Future.from<number, string, undefined>(async function* () {
-  let count = 0;
-  while (true) {
-    const timeout: number = 1000;
-    await new Promise((resolve) => setTimeout(resolve, timeout));
-    (yield count++);
-  }
-
-});
-
-// console.log({ value: await future.next() })
-// console.log({ value: await future.next(5000) })
-
-try {
-  for await (const value of future) {
-    console.log({ value });
-    if (value === 6) {
-      // console.log(await future.complete("done"));
-      console.log(future.cancel(new Error("done")));
-    }
-  }
-} catch (e) { }
-
-// console.log({
-//   completed: await future.next(4000),
-// })
-
-console.log({
-  canceled: await future.next(4000),
-})
-// console.log({ future: await future })
-
-// /**
-//  * Creates a readable stream that emits a sequence of data chunks.
-//  * In this example, the stream emits the numbers 1 to 5, then closes.
-//  *
-//  * @returns {ReadableStream<number>} A readable stream that emits numbers.
-//  */
-// function createReadableStream(): ReadableStream<number> {
-//   let count = 1; // Initialize the count
-
-//   return new ReadableStream<number>({
-//     start(controller) {
-//       // This method is called when the stream is first accessed
-//       // We begin pushing data to the stream
-//       function push() {
-//         if (count <= 5) {
-//           // Enqueue the current count as a chunk to the stream
-//           controller.enqueue(count);
-//           count += 1; // Increment count
-//           // Schedule another push in the next iteration of the event loop
-//           setTimeout(push, 1000); // Push a new chunk every second
-//         } else {
-//           // Close the stream once we've sent all data
-//           controller.close();
-//         }
-//       }
-
-//       // Start pushing the first chunk
-//       push();
-//     },
-//     cancel() {
-//       // Handle any cancellation logic if the consumer stops reading the stream
-//       console.log("Stream was canceled.");
+// async function* wrapper<T, TReturn, TNext>(generator: AsyncGenerator<T, TReturn, TNext>): AsyncGenerator<T, T | TReturn, TNext> | undefined {
+//   let err: unknown;
+//   let result: IteratorResult<T, T | TReturn> | undefined;
+//   try {
+//     if (!generator || typeof generator?.next !== "function") {
+//       throw new Error("generator not defined");
 //     }
-//   });
+
+//     // Continue yielding values until the generator completes
+//     do {
+//       const iteratorResult = result ?
+//         // Yield the value to the consumer and wait for the next input
+//         generator?.next?.(yield result?.value! as T) :
+//         // Prime the generator by starting the iteration process
+//         generator?.next?.();
+
+//       await Promise.race([iteratorResult]);
+//       result = await iteratorResult;
+//     } while (!result?.done);
+
+//     // Return the final value once iteration completes
+//     return result?.value as TReturn;
+//   } catch (error) {
+//     // If an error occurs, propagate it to the generator
+//     if (generator?.throw) {
+//       try {
+//         result = await generator.throw(error);
+//       } catch (genError) {
+//         err = genError;
+//       }
+//     } else {
+//       err = error;
+//     }
+
+//     // Rethrow the error if it wasn't caught by the generator
+//     if (err) throw err;
+//   }
 // }
 
-// // Example of using the readable stream
-// const stream = createReadableStream();
+// async function* gen() {
+//   throw new Error("Random message");
+//   yield new Promise((resolve) => setTimeout(resolve, 2000)); // Simulate a long-running task
+//   return 42;
+// }
 
-// // Reading the stream with a reader
-// const data = await Array.fromAsync(Future.from(stream));
+// try {
+//   const iterator = wrapper(gen());
+//   await iterator?.next();
+//   throw new Error("Expected the Future to be canceled due to deadline");
+// } catch (error) {
+//   console.log("Wrapper");
+// }
 
-// console.log(data); // [1, 2, 3, 4, 5]
+// try {
+//   const iterator = Future.from(gen);
+//   await iterator?.next();
+// } catch (e) {
+//   console.log("Future");
+// }
+
+const transformStream = new TransformStream();
+const sharedWriter = transformStream.writable.getWriter();
+let readableStream = transformStream.readable;
+
+const anotherWriter = transformStream.writable.getWriter();
+
+sharedWriter.write("Hello");
+
+(async () => {
+  for await (const chunk of readableStream) {
+    console.log(chunk);
+  }
+})();
+
+anotherWriter.write("World");
