@@ -269,13 +269,13 @@ export interface ReadableStreamWithDisposal<T> extends ReadableStream<T>, AsyncD
   /**
    * Synchronously disposes of the `ReadableStream`, canceling it and releasing resources.
    */
-  [Symbol.dispose](): void;
+  [Symbol.dispose](reason?: unknown): void;
 
   /**
    * Asynchronously disposes of the `ReadableStream`, canceling it and releasing resources.
    * @returns A promise that resolves when the disposal is complete.
    */
-  [Symbol.asyncDispose](): Promise<void>;
+  [Symbol.asyncDispose](reason?: unknown): Promise<void>;
 }
 
 /**
@@ -292,8 +292,8 @@ export function withDisposal<T>(stream: ReadableStream<T>): ReadableStreamWithDi
      * Synchronous disposal of the ReadableStream.
      * This cancels the stream and releases resources.
      */
-    [Symbol.dispose]() {
-      stream.cancel();
+    [Symbol.dispose](reason?: unknown) {
+      stream.cancel(reason);
     },
 
     /**
@@ -301,8 +301,8 @@ export function withDisposal<T>(stream: ReadableStream<T>): ReadableStreamWithDi
      * This cancels the stream and releases resources asynchronously.
      * @returns A promise that resolves when the disposal is complete.
      */
-    async [Symbol.asyncDispose]() {
-      await stream.cancel();
+    async [Symbol.asyncDispose](reason?: unknown) {
+      await stream.cancel(reason);
     }
   });
 }
