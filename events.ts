@@ -1,5 +1,5 @@
-import type { StatusEvent, StatusEnum, StatusEventMap } from "./status.ts";
-import type { ReadableStreamWithDisposal } from "./streams.ts";
+import type { StatusEvent, StatusEnum } from "./status.ts";
+import type { ReadableStreamWithDisposal } from "./disposal.ts";
 import { createChannel } from "./channel.ts";
 
 /**
@@ -110,9 +110,8 @@ export function createStatusEventDispatcher() {
     /**
      * Dispatches a status event to the channel.
      * @param event - The status event to dispatch.
-     * @template K - The key of the StatusEventMap corresponding to the status event type.
      */
-    async dispatch<K extends keyof StatusEventMap>(event: StatusEventMap[K]): Promise<void> {
+    async dispatch(event: StatusEvent<StatusEnum>): Promise<void> {
       const writer = channel.getWriter();
       await writer.write(event);
     },
@@ -151,36 +150,136 @@ export function createStatusEventDispatcher() {
 }
 
 /**
- * Listens for a specific event type from a ReadableStream and returns the first matching event.
- * Supports aborting the operation using an AbortSignal.
+ * Listens for a specific event type from a `ReadableStream` and returns the first matching event.
+ * Supports aborting the operation using an `AbortSignal`.
  *
- * @template T - The type of events in the ReadableStream.
+ * This function continuously reads from the provided `ReadableStream` until it finds an event
+ * that matches the specified type. It also supports cancellation through an `AbortSignal`,
+ * allowing the operation to be aborted if necessary. If the stream ends without a matching
+ * event and `throwOnNoMatch` is set to `true`, the function will throw an error.
+ *
+ * ## AbortSignal Support:
+ * If an `AbortSignal` is provided and the operation is aborted:
+ * - The function will resolve with the reason for the abortion.
+ * - The reader lock will be released before the stream is canceled.
+ * 
+ * ## Lock Handling:
+ * The function automatically releases the lock on the stream's reader when the operation completes,
+ * either by finding a matching event, reaching the end of the stream, or encountering an abort signal.
+ *
+ * ## Edge Cases:
+ * - If the stream ends without finding a matching event and `throwOnNoMatch` is `false`, the function will return `undefined`.
+ * - If the stream is aborted, the function will return the abort reason.
+ * - If `throwOnNoMatch` is `true` and no matching event is found, the function will throw an error.
+ *
+ * @template T - The type of events in the `ReadableStream`.
  * @template K - The specific event type to listen for.
- * @param stream - The ReadableStream to listen to.
- * @param type - The event type to match.
- * @param signal - An optional AbortSignal to cancel the operation.
- * @returns A promise that resolves with the first event that matches the specified type.
+ * @param stream - The `ReadableStream` or `ReadableStreamDefaultReader` to listen to.
+ * @param type - The event type to match against the stream's events.
+ * @param options.signal - An optional `AbortSignal` to cancel the operation.
+ * @param options.throwOnNoMatch - A boolean that, when true, throws an error if none of the events match. Defaults to `false`.
+ * @returns A promise that resolves with the first event that matches the specified type, the abort reason, or `undefined` if no match is found and `throwOnNoMatch` is `false`.
  *
  * @example
  * ```typescript
  * const statusEventStream = createStatusEventDispatcher().readable;
- * const runningEvent = await waitForEvent(statusEventStream, Status.Running, abortSignal);
- * console.log('Received running event:', runningEvent);
+ * 
+ * // Listen for the "Running" status event
+ * const runningEvent = await waitForEvent(statusEventStream, Status.Running, {
+ *   signal: abortSignal
+ * });
+ * 
+ * if (runningEvent) {
+ *   console.log('Received running event:', runningEvent);
+ * } else {
+ *   console.log('No running event received or operation was aborted');
+ * }
+ * ```
+ * 
+ * @example
+ * ```typescript
+ * const statusEventStream = createStatusEventDispatcher().readable;
+ * 
+ * // Listen for the "Paused" status event with error handling if no match is found
+ * try {
+ *   const pausedEvent = await waitForEvent(statusEventStream, Status.Paused, {
+ *     signal: abortSignal,
+ *     throwOnNoMatch: true
+ *   });
+ *   console.log('Received paused event:', pausedEvent);
+ * } catch (error) {
+ *   console.error('Error:', error.message);
+ * }
  * ```
  */
 export async function waitForEvent<T extends StatusEvent<StatusEnum>, K extends StatusEnum>(
-  stream: ReadableStream<T>,
+  stream: ReadableStream<T> | ReadableStreamDefaultReader<T>,
   type: K,
-  signal?: AbortSignal
-): Promise<T | undefined> {
-  for await (const event of stream) {
-    // Attach the abort handler if an AbortSignal is provided
-    if (signal?.aborted) return;
+  { signal, throwOnNoMatch = false }: WaitForEventOptions = {}
+): Promise<T | StatusEvent | Error | undefined> {
+  const reader = "getReader" in stream ? stream.getReader() : stream;
+  let result: ReadableStreamReadResult<T> | AbortedReadableStreamReadDoneResult;
 
-    if (event.status === type) {
-      return event;
+  // Promise that resolves if the signal is aborted
+  const abortable = new Promise<AbortedReadableStreamReadDoneResult>((resolve) => {
+    if (signal?.aborted) {
+      resolve({ done: true, value: { aborted: true, reason: signal.reason } });
+    } else {
+      signal?.addEventListener?.("abort", () => {
+        resolve({ done: true, value: { aborted: true, reason: signal.reason } });
+      }, { once: true });
     }
+  });
+
+  try {
+    do {
+      if (signal?.aborted) return signal.reason;
+
+      // Wait for either a read result or an abort signal
+      result = await Promise.race([
+        reader.read(),
+        abortable,
+      ]);
+
+      // Check if the operation was aborted
+      if ((result as AbortedReadableStreamReadDoneResult)?.value?.aborted) {
+        return (result as AbortedReadableStreamReadDoneResult)?.value?.reason as Error | StatusEvent;
+      }
+
+      // Check if the event matches the desired type
+      if ((result as ReadableStreamReadDoneResult<T>)?.value?.status === type) {
+        return (result as ReadableStreamReadDoneResult<T>).value;
+      }
+    } while (!result?.done);
+  } finally {
+    // Release the reader's lock before attempting to cancel the stream
+    reader?.releaseLock?.();
   }
 
-  throw new Error(`Stream ended without receiving event of type: ${type}`);
+  if (throwOnNoMatch) {
+    throw new Error(`Stream ended without receiving event of type: ${type}`);
+  }
 }
+
+/**
+ * Options for the `waitForEvent` function.
+ */
+export interface WaitForEventOptions {
+  /**
+   * Whether to throw an error if no matching event is found.
+   * @defaultValue false
+   */
+  throwOnNoMatch?: boolean;
+
+  /**
+   * An optional `AbortSignal` to cancel the operation.
+   */
+  signal?: AbortSignal;
+}
+
+/**
+ * Represents the result of a `ReadableStream` read operation that was aborted.
+ * This type is used internally by the `waitForEvent` function to manage abort signals.
+ * @internal
+ */
+export type AbortedReadableStreamReadDoneResult = ReadableStreamReadDoneResult<{ aborted: boolean, reason: unknown }>;

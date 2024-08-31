@@ -16,21 +16,29 @@ export type StatusEnum = typeof Status[keyof typeof Status];
  * @template T - The specific status of the event.
  * @template TDetail - The detailed data associated with the event.
  */
-export class StatusEvent<T extends StatusEnum, TDetail = unknown>
+export class StatusEvent<T extends StatusEnum = typeof Status.Idle, TDetail = unknown>
   extends CustomEvent<TDetail> {
   constructor(public status = Status.Idle as T, detail?: TDetail) {
     super("status", { detail: Object.assign({}, detail) });
   }
 }
 
+
+/**
+ * A map defining the specific StatusEvent detail types for each status.
+ */
+export interface StatusEventDetailMap extends Record<StatusEnum, unknown> {
+  [Status.Idle]: unknown;
+  [Status.Running]: unknown;
+  [Status.Paused]: unknown;
+  [Status.Completed]: { value: unknown };
+  [Status.Cancelled]: { reason: unknown };
+  [Status.Destroyed]: unknown;
+}
+
 /**
  * A map defining the specific StatusEvent types for each status.
  */
-export interface StatusEventMap extends Record<StatusEnum, StatusEvent<StatusEnum, unknown>> {
-  [Status.Idle]: StatusEvent<typeof Status.Idle, unknown>;
-  [Status.Running]: StatusEvent<typeof Status.Running, unknown>;
-  [Status.Paused]: StatusEvent<typeof Status.Paused, unknown>;
-  [Status.Completed]: StatusEvent<typeof Status.Completed, { value: unknown }>;
-  [Status.Cancelled]: StatusEvent<typeof Status.Cancelled, { reason: unknown }>;
-  [Status.Destroyed]: StatusEvent<typeof Status.Destroyed, unknown>;
-}
+export type StatusEventMap = {
+  [K in StatusEnum]: StatusEvent<StatusEnum, StatusEventDetailMap[K]>;
+};

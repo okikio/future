@@ -14,8 +14,8 @@
  * @module
  */
 
-import type { ReadableStreamWithDisposal } from "./streams.ts";
-import { withDisposal } from "./streams.ts";
+import type { ReadableStreamWithDisposal } from "./disposal.ts";
+import { ReadableStreamReaderSet, withDisposal } from "./disposal.ts";
 
 /**
  * Creates a unidirectional communication channel built on Web Streams, allowing data to flow from one or more writers to multiple independent readers.
@@ -132,7 +132,6 @@ export function createChannel<T>() {
   const transformStream = new TransformStream<T, T>();
   const sharedWriter = transformStream.writable.getWriter();
   let readableStream = transformStream.readable;
-  const readers = new Set<ReadableStream<T>>();
 
   return {
     /**
@@ -157,8 +156,10 @@ export function createChannel<T>() {
     get readable(): ReadableStreamWithDisposal<T> {
       const [branch1, branch2] = readableStream.tee();
       readableStream = branch2; // Keep one branch for further teeing
+      ReadableStreamReaderSet.add(readableStream);
+
       const wrappedBranch1 = withDisposal(branch1);
-      readers.add(wrappedBranch1);
+      ReadableStreamReaderSet.add(wrappedBranch1);
       return wrappedBranch1;
     },
 
@@ -167,8 +168,15 @@ export function createChannel<T>() {
      */
     close() {
       sharedWriter.close(); // Close the writable stream
-      readers.forEach((reader) => reader.cancel()); // Cancel all readable branches
-      readers.clear(); // Clear the set of readers
+      ReadableStreamReaderSet.forEach((reader) => {
+        if (reader.locked) {
+          reader.getReader().releaseLock(); // Release the reader lock
+        }
+
+        // Cancel all readable branches
+        return reader.cancel();
+      }); 
+      ReadableStreamReaderSet.clear(); // Clear the set of readers
     },
 
     /**
@@ -185,8 +193,18 @@ export function createChannel<T>() {
      */
     async [Symbol.asyncDispose]() {
       await sharedWriter.close();
-      await Promise.all(Array.from(readers).map((reader) => reader.cancel()));
-      readers.clear();
+      await Promise.all(
+        Array.from(ReadableStreamReaderSet).map((reader) => {
+          if (reader.locked) {
+            reader.getReader().releaseLock(); // Release the reader lock
+          }
+  
+          // Cancel all readable branches
+          return reader.cancel()
+        })
+      );
+      
+      ReadableStreamReaderSet.clear();
     }
   };
 }

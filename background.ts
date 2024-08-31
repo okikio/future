@@ -29,7 +29,7 @@ export function inBackground<T, TReturn, TNext>(
     // If no valid iterator was found, throw an error indicating that the input is not iterable or an iterator
     if (
       (generator ?? null) === null ||
-      typeof (generator as AsyncGenerator<T, TReturn, TNext>)?.next ===
+      typeof (generator as AsyncGenerator<T, TReturn, TNext>)?.next !==
         "function"
     ) throw new TypeError("The provided input is not a future.");
 

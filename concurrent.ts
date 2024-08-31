@@ -161,7 +161,7 @@ export function withConcurrencyLimit<T, TReturn, TNext>(
       // If no valid iterator was found, throw an error indicating that the input is not iterable or an iterator
       if (
         (iterator ?? null) === null ||
-        typeof iterator?.next === "function"
+        typeof iterator?.next !== "function"
       ) {
         throw new TypeError(
           "The provided input is not an iterable nor an iterator.",

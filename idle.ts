@@ -66,7 +66,7 @@ export function idle(
   } else {
     // Fallback to setTimeout if requestIdleCallback is not available
     const start = globalThis?.performance?.now?.() ?? Date?.now?.();
-    return globalThis.setTimeout(() => {
+    return globalThis?.setTimeout?.(() => {
       const end = globalThis?.performance?.now?.() ?? Date?.now?.();
       const delta = end - start;
 
