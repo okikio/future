@@ -1,11 +1,37 @@
 /// <reference lib="dom" />
 /**
+ * Utility functions for scheduling and canceling operations during idle time.
+ *
+ * This module provides a set of functions that allow you to schedule tasks
+ * to run during idle periods, utilizing `requestIdleCallback` where available,
+ * and falling back to `setTimeout` in environments where `requestIdleCallback` is not supported.
+ *
+ * @example
+ *
+ * ```typescript
+ * import { idle, cancelIdle, IDLE_TIMEOUT } from './idle-utils.ts';
+ *
+ * // Schedule a task to run during idle time
+ * const handle = idle((deadline) => {
+ *   while (deadline.timeRemaining() > 0) {
+ *     performTask();
+ *   }
+ * });
+ *
+ * // Optionally, cancel the scheduled idle task
+ * cancelIdle(handle);
+ * ```
+ *
+ * @module
+ */
+
+/**
  * The timeout to use when `requestIdleCallback` is not available.
  * The recommended upper limit is 50ms.
  *
  * @remarks
  * `requestIdleCallback` is used by the browser to run low-priority code when the main thread is idle.
- * When `requestIdleCallback` is unavailable (e.g., in Node.js or older browsers),
+ * When `requestIdleCallback` is unavailable (e.g., in Node.js, Deno, Bun or older browsers),
  * we fallback to `setTimeout`. The `IDLE_TIMEOUT` serves as a maximum time limit when using the fallback,
  * and it is set to 50ms, which is the recommended upper limit.
  *
@@ -22,13 +48,15 @@ export const IDLE_TIMEOUT = 50;
  * @param options - Optional configuration for idle callback. If no options are provided,
  * a default timeout is used. The default timeout is 50ms.
  *
- * @returns A handle to the idle callback or timeout. This can be used to cancel the operation.
+ * @returns A handle to the idle callback or timeout, which can be used to cancel the operation.
+ * - If `requestIdleCallback` is available, the handle is of type `IdleCallbackHandle`.
+ * - If `requestIdleCallback` is not available, the handle is of type `number` (from `setTimeout`).
  *
  * @remarks
  * This function will use `requestIdleCallback` if it is available in the runtime.
- * If it is not available (such as in Node.js or older browsers), the function will fallback to `setTimeout`.
+ * If it is not available (such as in Node.js, Deno, Bun or older browsers), the function will fallback to `setTimeout`.
  *
- * ### Example: Using idle callback in the browser
+ * @example Using idle callback in the browser
  * ```ts
  * const handle = idle(deadline => {
  *   while (deadline.timeRemaining() > 0 && tasks.length > 0) {
@@ -37,7 +65,7 @@ export const IDLE_TIMEOUT = 50;
  * });
  * ```
  *
- * ### Example: Fallback with timeout in Node.js
+ * @example Fallback with timeout in Node.js, Deno, or Bun
  * ```ts
  * const handle = idle(deadline => {
  *   performTask();
@@ -53,7 +81,9 @@ export const IDLE_TIMEOUT = 50;
 export function idle(
   callback: IdleRequestCallback,
   options: IdleRequestOptions = {},
-) {
+): ReturnType<
+  typeof globalThis.requestIdleCallback | typeof globalThis.setTimeout
+> {
   // Set default timeout if not provided
   const timeout = (options.timeout ??= IDLE_TIMEOUT);
 
@@ -62,7 +92,7 @@ export function idle(
     "cancelIdleCallback" in globalThis
   ) {
     // Use requestIdleCallback if available
-    return globalThis.requestIdleCallback(callback, options);
+    return globalThis?.requestIdleCallback?.(callback, options);
   } else {
     // Fallback to setTimeout if requestIdleCallback is not available
     const start = globalThis?.performance?.now?.() ?? Date?.now?.();
@@ -103,15 +133,19 @@ export function idle(
  * cancelIdle(handle); // Cancel the idle callback or timeout
  * ```
  */
-export function cancelIdle(handle: ReturnType<typeof idle>) {
+export function cancelIdle(handle: ReturnType<typeof idle>): void {
   if (
     "requestIdleCallback" in globalThis &&
     "cancelIdleCallback" in globalThis
   ) {
     // Use cancelIdleCallback if available
-    return globalThis.cancelIdleCallback(handle);
+    return globalThis?.cancelIdleCallback?.(
+      handle as ReturnType<typeof globalThis.requestIdleCallback>,
+    );
   } else {
     // Fallback to clearTimeout if requestIdleCallback is not available
-    return globalThis.clearTimeout(handle);
+    return globalThis?.clearTimeout?.(
+      handle as ReturnType<typeof globalThis.setTimeout>,
+    );
   }
 }

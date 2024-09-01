@@ -1,16 +1,21 @@
 /// <reference lib="dom" />
-import type { StatusEnum, StatusEventDetailMap, StatusEventMap } from "./status.ts";
+import type {
+  StatusEnum,
+  StatusEventDetailMap,
+  StatusEventMap,
+} from "./status.ts";
 
 import { createStatusEventDispatcher, waitForEvent } from "./events.ts";
 import { Status, StatusEvent } from "./status.ts";
 import { CancellationError } from "./errors.ts";
+import { timeout } from "./disposal.ts";
 
 /**
  * The timeout to use when `generator.return` is called to ensure cleanup logic is executed.
  * The reason for this timeout is to prevent the generator from hanging indefinitely,
  * if the cleanup logic fails to complete or gets stuck.
  */
-export const GENERATOR_RETURN_TIMEOUT = 1000;
+export const GENERATOR_RETURN_TIMEOUT = 1_000;
 
 /**
  * The `Future` class is a more powerful and flexible alternative to JavaScript's native `Promise`,
@@ -72,10 +77,10 @@ export const GENERATOR_RETURN_TIMEOUT = 1000;
  *
  * @template T - The type of the value that the future will resolve to.
  */
-export class Future<T, TReturn = unknown, TNext = unknown> 
+export class Future<T, TReturn = unknown, TNext = unknown> implements
   // @ts-ignore Iterator is defined but typescript doesn't recognize it yet
   // extends globalThis.Iterator
-  implements PromiseLike<T | TReturn> {
+  PromiseLike<T | TReturn> {
   #generator?: AsyncGenerator<T, T | TReturn, TNext> | null;
   #operation?: FutureOperation<T, TReturn, TNext> | null;
   #abort: AbortController | null = null;
@@ -87,7 +92,10 @@ export class Future<T, TReturn = unknown, TNext = unknown>
    * Creates a new `Future` instance.
    * @param operation - A function that returns an async generator to define the asynchronous task.
    */
-  constructor(operation: FutureOperation<T, TReturn, TNext>, abort = new AbortController()) {
+  constructor(
+    operation: FutureOperation<T, TReturn, TNext>,
+    abort: AbortController | undefined | null = new AbortController(),
+  ) {
     // super();
 
     this.#abort = abort;
@@ -95,15 +103,18 @@ export class Future<T, TReturn = unknown, TNext = unknown>
     this.#generator = this.#wrapper(this.#operation);
   }
 
-  is(id: StatusEnum) {
+  is(id: StatusEnum): boolean {
     return this.#status === id;
   }
 
-  getStatus() {
+  getStatus(): StatusEnum {
     return this.#status;
   }
 
-  #setStatus<K extends keyof StatusEventMap>(status: K, details?: StatusEventDetailMap[K]) {
+  #setStatus<K extends keyof StatusEventMap>(
+    status: K,
+    details?: StatusEventDetailMap[K],
+  ) {
     this.#status = status;
     this.#events.dispatch(new StatusEvent(status, details));
   }
@@ -118,28 +129,6 @@ export class Future<T, TReturn = unknown, TNext = unknown>
     return this.#abort?.signal?.reason;
   }
 
-  complete(value: T | TReturn | undefined) {
-    this.#setStatus(Status.Completed, { value });
-    return this;
-  }
-
-  /**
-   * Cancels the future, preventing further execution.
-   * @example
-   * ```typescript
-   * import * as Future from "./mod.ts";
-   * const future = Future.from(async function* () {
-   *   yield 42;
-   *   return 100;
-   * });
-   * future.cancel(); // Aborts future execution
-   * ```
-   */
-  cancel(reason: unknown = new CancellationError()) {
-    this.#abort?.abort?.(reason);
-    return this;
-  }
-
   /**
    * Pauses the execution of the future.
    * @example
@@ -152,7 +141,7 @@ export class Future<T, TReturn = unknown, TNext = unknown>
    * future.pause(); // Pauses future execution
    * ```
    */
-  pause() {
+  pause(): Future<T, TReturn, TNext> {
     if (!this.is(Status.Paused)) {
       this.#setStatus(Status.Paused);
     }
@@ -171,7 +160,7 @@ export class Future<T, TReturn = unknown, TNext = unknown>
    * future.resume(); // Resumes future execution
    * ```
    */
-  resume() {
+  resume(): Future<T, TReturn, TNext> {
     if (this.is(Status.Paused)) {
       this.#setStatus(Status.Running);
     }
@@ -193,7 +182,7 @@ export class Future<T, TReturn = unknown, TNext = unknown>
    * future.reset(); // Resets the future for reuse
    * ```
    */
-  reset() {
+  reset(): Future<T, TReturn, TNext> {
     if (this.is(Status.Destroyed)) {
       throw new Error("Cannot reset a destroyed future");
     }
@@ -207,7 +196,41 @@ export class Future<T, TReturn = unknown, TNext = unknown>
     return this;
   }
 
-  dispose() {
+  complete(value: T | TReturn | undefined): Future<T, TReturn, TNext> {
+    this.#setStatus(Status.Completed, { value });
+    return this;
+  }
+
+  /**
+   * Cancels the future, preventing further execution.
+   * @example
+   * ```typescript
+   * import * as Future from "./mod.ts";
+   * const future = Future.from(async function* () {
+   *   yield 42;
+   *   return 100;
+   * });
+   * future.cancel(); // Aborts future execution
+   * ```
+   */
+  async cancel(reason: unknown = new CancellationError()): Promise<
+    | StatusEvent<StatusEnum, unknown>
+    | StatusEvent<"idle", unknown>
+    | Error
+    | undefined
+  > {
+    using events = this.#events.events;
+    const eventPromise = waitForEvent(events, Status.Cancelled);
+
+    await Promise.all([
+      eventPromise,
+      this.#abort?.abort?.(reason),
+    ]);
+
+    return await eventPromise;
+  }
+
+  dispose(): void {
     this.cancel();
 
     this.#abort?.signal?.removeEventListener?.("abort", this.#eventhandler);
@@ -224,8 +247,25 @@ export class Future<T, TReturn = unknown, TNext = unknown>
     this.#status = Status.Destroyed;
   }
 
-  [Symbol.dispose]() {
+  [Symbol.dispose](): void {
     this.dispose();
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.cancel();
+
+    this.#abort?.signal?.removeEventListener?.("abort", this.#eventhandler);
+    this.#eventhandler?.dispose?.();
+
+    // @ts-ignore Resetting private properties
+    this.#eventhandler = null as unknown;
+    this.#events?.close?.();
+
+    this.#abort = null;
+    this.#operation = null;
+    this.#generator = null;
+
+    this.#status = Status.Destroyed;
   }
 
   /**
@@ -313,7 +353,7 @@ export class Future<T, TReturn = unknown, TNext = unknown>
    *   - If the future is canceled, an error will be thrown.
    *
    * ### Method Breakdown:
-   * 
+   *
    * This method is responsible for managing the generator's lifecycle, including handling:
    * - **Initialization**: Sets up the generator and ensures it's ready for iteration.
    * - **Event Handling**: Manages the status events, such as handling pauses, cancellations, and completion.
@@ -352,7 +392,10 @@ export class Future<T, TReturn = unknown, TNext = unknown>
           }
 
           // Proceed with the generator's next result.
-          result = await this.#getNextResult(generator, result ? yield result?.value! as T : undefined);
+          result = await this.#getNextResult(
+            generator,
+            result ? yield result?.value! as T : undefined,
+          );
         } catch (error) {
           // Handle error and attempt early return from generator.
           const returnedResult = await this.#handleError(generator);
@@ -361,7 +404,6 @@ export class Future<T, TReturn = unknown, TNext = unknown>
           // Rethrow error if it wasn't handled.
           throw error;
         }
-
       } while (!result?.done);
 
       // Return final value once generator completes.
@@ -377,15 +419,15 @@ export class Future<T, TReturn = unknown, TNext = unknown>
       this.#events.dispatch(
         new StatusEvent(
           Status.Completed,
-          { value: result?.value }
-        )
+          { value: result?.value },
+        ),
       );
     }
   }
 
   /** Helper method to initialize the generator. */
   #createGenerator(
-    operation: FutureOperation<T, TReturn, TNext>
+    operation: FutureOperation<T, TReturn, TNext>,
   ): AsyncGenerator<T, T | TReturn, TNext> | Generator<T, T | TReturn, TNext> {
     // Reset abort controller if already aborted.
     if (this.#abort?.signal?.aborted) {
@@ -394,7 +436,9 @@ export class Future<T, TReturn = unknown, TNext = unknown>
     }
 
     // Attach event handler for abort signal.
-    this.#abort?.signal?.addEventListener?.("abort", this.#eventhandler);
+    this.#abort?.signal?.addEventListener?.("abort", this.#eventhandler, {
+      once: true,
+    });
 
     const generator = operation?.(this.#abort!);
     if (!generator || typeof generator?.next !== "function") {
@@ -405,7 +449,7 @@ export class Future<T, TReturn = unknown, TNext = unknown>
   }
 
   /** Helper method to handle pausing of the future. */
-  async #handlePause() {
+  async #handlePause(): Promise<void> {
     if (this.is(Status.Paused)) {
       using events = this.#events.events;
       for await (const event of events) {
@@ -419,8 +463,10 @@ export class Future<T, TReturn = unknown, TNext = unknown>
 
   /** Helper method to handle the completion of the future. */
   async #handleCompletion(
-    generator: AsyncGenerator<T, T | TReturn, TNext> | Generator<T, T | TReturn, TNext>,
-    result: IteratorResult<T, T | TReturn> | undefined
+    generator:
+      | AsyncGenerator<T, T | TReturn, TNext>
+      | Generator<T, T | TReturn, TNext>,
+    result: IteratorResult<T, T | TReturn> | undefined,
   ): Promise<T | TReturn> {
     const value = result?.value;
 
@@ -432,8 +478,10 @@ export class Future<T, TReturn = unknown, TNext = unknown>
 
   /** Helper method to get the next result from the generator. */
   async #getNextResult(
-    generator: AsyncGenerator<T, T | TReturn, TNext> | Generator<T, T | TReturn, TNext>,
-    input?: TNext
+    generator:
+      | AsyncGenerator<T, T | TReturn, TNext>
+      | Generator<T, T | TReturn, TNext>,
+    input?: TNext,
   ): Promise<IteratorResult<T, T | TReturn>> {
     // Advance the generator by calling `.next` with the provided input
     const iteratorResult = input !== undefined
@@ -443,8 +491,8 @@ export class Future<T, TReturn = unknown, TNext = unknown>
     // Wait for either the generator's next result or a cancellation event
     using events = this.#events.events;
     const event = await Promise.race([
-      iteratorResult,  // Continue with the generator
-      waitForEvent(events, Status.Cancelled, { signal: this.#abort?.signal }),  // Listen for cancellation
+      iteratorResult, // Continue with the generator
+      waitForEvent(events, Status.Cancelled, { signal: this.#abort?.signal }), // Listen for cancellation
     ]);
 
     // If a cancellation event occurs or the abort signal is triggered, throw an error
@@ -472,19 +520,22 @@ export class Future<T, TReturn = unknown, TNext = unknown>
    * @returns A promise resolving to the result of the generator's return, if applicable.
    */
   async #handleError(
-    generator: AsyncGenerator<T, T | TReturn, TNext> | Generator<T, T | TReturn, TNext>,
+    generator:
+      | AsyncGenerator<T, T | TReturn, TNext>
+      | Generator<T, T | TReturn, TNext>,
   ): Promise<IteratorResult<T, T | TReturn> | undefined> {
     try {
-        // If an error occurs, attempt to return early from the generator
-        if (generator?.return) {
+      // If an error occurs, attempt to return early from the generator
+      if (generator?.return) {
         const returnedResult = generator.return(undefined as TReturn);
+        using timeoutPromise = timeout(GENERATOR_RETURN_TIMEOUT);
 
         // Attempt to return early if there's an error
         await Promise.race([
           returnedResult,
-          new Promise((_, reject) => setTimeout(reject, 1000)),
+          timeoutPromise,
         ]);
-      
+
         return await returnedResult;
       }
     } catch {
@@ -493,7 +544,7 @@ export class Future<T, TReturn = unknown, TNext = unknown>
   }
 
   /** Helper method to abort the future if it hasn't been aborted already. */
-  #abortFuture(err: unknown) {
+  #abortFuture(err: unknown): void {
     // If the future wasn't already aborted, abort it now
     if (!this.#abort?.signal?.aborted) {
       this.#abort?.abort?.(err);
@@ -514,6 +565,42 @@ export class Future<T, TReturn = unknown, TNext = unknown>
 
   next(...args: [] | [TNext]): PromiseLike<IteratorResult<T, T | TReturn>> {
     return this.#generator!.next?.(...args);
+  }
+
+  return(
+    value: T | TReturn | PromiseLike<T | TReturn>,
+  ): PromiseLike<IteratorResult<T, T | TReturn>> {
+    return this.#generator!.return?.(value);
+  }
+
+  throw(e: unknown): PromiseLike<IteratorResult<T, T | TReturn>> {
+    return this.#generator!.throw?.(e);
+  }
+
+  /**
+   * Clones the current Future, creating a new instance with the same operation.
+   * The cloned Future starts in the idle state, allowing it to run independently of the original.
+   *
+   * @returns A new Future instance with the same operation.
+   *
+   * @example
+   * ```typescript
+   * const originalFuture = Future.from(async function* () {
+   *   yield 1;
+   *   return 2;
+   * });
+   *
+   * const clonedFuture = originalFuture.clone();
+   * console.log(await clonedFuture.toPromise()); // Logs 2
+   * ```
+   */
+  clone(): Future<T, TReturn, TNext> {
+    if (!this.#operation) {
+      throw new Error("Cannot clone a Future without an operation.");
+    }
+
+    // Create a new Future with the same operation
+    return new Future<T, TReturn, TNext>(this.#operation);
   }
 
   /**
@@ -596,17 +683,17 @@ export class Future<T, TReturn = unknown, TNext = unknown>
       this.#delegate = delegate;
     }
 
-    handleEvent(event: Event) {
+    handleEvent(event: Event): void {
       if (this.#delegate) {
         this.#delegate.#handleEvent(event);
       }
     }
 
-    dispose() {
+    dispose(): void {
       this.#delegate = null;
     }
 
-    [Symbol.dispose]() { 
+    [Symbol.dispose](): void {
       this.dispose();
     }
   };

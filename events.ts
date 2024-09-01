@@ -1,21 +1,73 @@
-import type { StatusEvent, StatusEnum } from "./status.ts";
+import type { StatusEnum, StatusEvent } from "./status.ts";
 import type { ReadableStreamWithDisposal } from "./disposal.ts";
 import { createChannel } from "./channel.ts";
+
+/**
+ * This module provides functionality for creating and managing status event dispatchers using the Web Streams API.
+ * It allows for efficient broadcasting of status events to multiple listeners with proper handling of backpressure and synchronization.
+ * 
+ * @module
+ */
+
+/**
+ * Represents the return type of the `createStatusEventDispatcher` function.
+ *
+ * This interface defines the structure of the dispatcher object, which includes methods for dispatching events,
+ * accessing the readable stream of events, and managing the lifecycle of the dispatcher.
+ */
+export interface StatusEventDispatcher {
+  /**
+   * Dispatches a status event to the channel.
+   *
+   * @param event - The status event to dispatch.
+   * @returns A promise that resolves when the event has been dispatched.
+   */
+  dispatch(event: StatusEvent<StatusEnum>): Promise<void>;
+
+  /**
+   * Provides a new readable stream that can be used with `for await...of`
+   * to listen to status events.
+   *
+   * @returns A new readable stream of StatusEvents.
+   */
+  readonly events: ReadableStreamWithDisposal<StatusEvent<StatusEnum>>;
+
+  /**
+   * Closes the event dispatcher, terminating all streams.
+   *
+   * @returns `void`
+   */
+  close(): void;
+
+  /**
+   * Disposes of the dispatcher, releasing resources.
+   *
+   * @returns `void`
+   */
+  [Symbol.dispose](): void;
+
+  /**
+   * Disposes of the dispatcher asynchronously, releasing resources.
+   *
+   * @returns A promise that resolves when the disposal is complete.
+   */
+  [Symbol.asyncDispose](): Promise<void>;
+}
 
 /**
  * Creates a status event dispatcher that allows dispatching and listening to status events
  * using the Web Streams API. This function utilizes a channel internally to manage event
  * dispatching and multiple listeners via `for await...of`.
- * 
+ *
  * ## What is a Channel?
  * A channel is a communication mechanism built on top of Web Streams, allowing data to flow
  * from one or more producers (writers) to multiple independent consumers (readers). Channels
  * efficiently manage data flow, backpressure, and synchronization across multiple consumers.
- * 
+ *
  * In the context of `createStatusEventDispatcher`, the channel provides the infrastructure for
  * broadcasting status events to multiple listeners while ensuring that all listeners receive
  * the events as they occur. For more details, see the documentation for `createChannel`.
- * 
+ *
  * @see {@link createChannel} for more information on how channels are implemented and their benefits.
  *
  * ## Key Features:
@@ -24,36 +76,36 @@ import { createChannel } from "./channel.ts";
  * - Uses `ReadableStream.tee()` to create multiple branches, enabling independent consumption of the same data stream.
  *
  * ## Important Considerations:
- * 
+ *
  * ### Event Timing and Backpressure
- * - **Event Dispatch Timing**: Unlike `EventTarget`, where all listeners receive the event immediately, 
- *   `ReadableStreams` introduce backpressure. This means that if one listener is slower in consuming 
+ * - **Event Dispatch Timing**: Unlike `EventTarget`, where all listeners receive the event immediately,
+ *   `ReadableStreams` introduce backpressure. This means that if one listener is slower in consuming
  *   the stream, it could delay the delivery of events to other listeners.
- * - **Synchronization**: All branches created via `tee()` must be ready to consume data before the 
- *   underlying source produces more data. This can result in a slower processing speed if there is 
+ * - **Synchronization**: All branches created via `tee()` must be ready to consume data before the
+ *   underlying source produces more data. This can result in a slower processing speed if there is
  *   a discrepancy in consumption rates between different listeners.
  *
  * ### Behavior of `ReadableStream.tee()`
- * - **Mid-Stream `tee()`**: When `tee()` is called on a `ReadableStream` mid-event and a new listener 
- *   is added via `for await...of`, the new stream will only start consuming events from the next 
- *   unconsumed event onward. It will not receive any previously consumed events from before the `tee()` 
+ * - **Mid-Stream `tee()`**: When `tee()` is called on a `ReadableStream` mid-event and a new listener
+ *   is added via `for await...of`, the new stream will only start consuming events from the next
+ *   unconsumed event onward. It will not receive any previously consumed events from before the `tee()`
  *   was called.
- * - **Pre-existing Streams**: The original stream will continue consuming data as normal, but its 
- *   consumption pace might be affected by the newly created branches. Specifically, if the new branches 
+ * - **Pre-existing Streams**: The original stream will continue consuming data as normal, but its
+ *   consumption pace might be affected by the newly created branches. Specifically, if the new branches
  *   are slower, the original stream will be paused until all branches are ready to consume the next event.
- * - **No Retroactive Events**: The newly created branches do not loop through or receive events that were 
+ * - **No Retroactive Events**: The newly created branches do not loop through or receive events that were
  *   already consumed by the original stream. They only process new events that have not yet been consumed.
  *
  * ### Performance Impact
- * - **Backpressure Management**: The system will introduce natural backpressure if one of the branches 
- *   is slower, ensuring data consistency across all branches. However, this could lead to performance 
+ * - **Backpressure Management**: The system will introduce natural backpressure if one of the branches
+ *   is slower, ensuring data consistency across all branches. However, this could lead to performance
  *   degradation if one listener significantly lags behind others.
- * - **Use Case Suitability**: This method works best when streams are set up at the start and have 
- *   similar consumption speeds. If frequent dynamic listener addition is required, a custom event 
+ * - **Use Case Suitability**: This method works best when streams are set up at the start and have
+ *   similar consumption speeds. If frequent dynamic listener addition is required, a custom event
  *   multiplexing solution might be preferable.
  *
  * @template T - The specific status type being dispatched and listened for.
- * 
+ *
  * @returns An object with methods to dispatch status events, listen to them, and manage the stream lifecycle.
  *
  * @remarks
@@ -100,10 +152,10 @@ import { createChannel } from "./channel.ts";
  * @see WritableStream
  * @see TransformStream
  * @see {@link createChannel} for more information on how channels are implemented and their benefits.
- * 
+ *
  * @public
  */
-export function createStatusEventDispatcher() {
+export function createStatusEventDispatcher(): StatusEventDispatcher {
   const channel = createChannel<StatusEvent<StatusEnum>>();
 
   return {
@@ -119,7 +171,7 @@ export function createStatusEventDispatcher() {
     /**
      * Provides a new readable stream that can be used with `for await...of`
      * to listen to status events.
-     * 
+     *
      * @returns A new readable stream of StatusEvents.
      */
     get events(): ReadableStreamWithDisposal<StatusEvent<StatusEnum>> {
@@ -162,7 +214,7 @@ export function createStatusEventDispatcher() {
  * If an `AbortSignal` is provided and the operation is aborted:
  * - The function will resolve with the reason for the abortion.
  * - The reader lock will be released before the stream is canceled.
- * 
+ *
  * ## Lock Handling:
  * The function automatically releases the lock on the stream's reader when the operation completes,
  * either by finding a matching event, reaching the end of the stream, or encountering an abort signal.
@@ -183,23 +235,23 @@ export function createStatusEventDispatcher() {
  * @example
  * ```typescript
  * const statusEventStream = createStatusEventDispatcher().readable;
- * 
+ *
  * // Listen for the "Running" status event
  * const runningEvent = await waitForEvent(statusEventStream, Status.Running, {
  *   signal: abortSignal
  * });
- * 
+ *
  * if (runningEvent) {
  *   console.log('Received running event:', runningEvent);
  * } else {
  *   console.log('No running event received or operation was aborted');
  * }
  * ```
- * 
+ *
  * @example
  * ```typescript
  * const statusEventStream = createStatusEventDispatcher().readable;
- * 
+ *
  * // Listen for the "Paused" status event with error handling if no match is found
  * try {
  *   const pausedEvent = await waitForEvent(statusEventStream, Status.Paused, {
@@ -212,24 +264,35 @@ export function createStatusEventDispatcher() {
  * }
  * ```
  */
-export async function waitForEvent<T extends StatusEvent<StatusEnum>, K extends StatusEnum>(
+export async function waitForEvent<
+  T extends StatusEvent<StatusEnum>,
+  K extends StatusEnum,
+>(
   stream: ReadableStream<T> | ReadableStreamDefaultReader<T>,
   type: K,
-  { signal, throwOnNoMatch = false }: WaitForEventOptions = {}
+  { signal, throwOnNoMatch = false }: WaitForEventOptions = {},
 ): Promise<T | StatusEvent | Error | undefined> {
   const reader = "getReader" in stream ? stream.getReader() : stream;
   let result: ReadableStreamReadResult<T> | AbortedReadableStreamReadDoneResult;
 
   // Promise that resolves if the signal is aborted
-  const abortable = new Promise<AbortedReadableStreamReadDoneResult>((resolve) => {
-    if (signal?.aborted) {
-      resolve({ done: true, value: { aborted: true, reason: signal.reason } });
-    } else {
-      signal?.addEventListener?.("abort", () => {
-        resolve({ done: true, value: { aborted: true, reason: signal.reason } });
-      }, { once: true });
-    }
-  });
+  const abortable = new Promise<AbortedReadableStreamReadDoneResult>(
+    (resolve) => {
+      if (signal?.aborted) {
+        resolve({
+          done: true,
+          value: { aborted: true, reason: signal.reason },
+        });
+      } else {
+        signal?.addEventListener?.("abort", () => {
+          resolve({
+            done: true,
+            value: { aborted: true, reason: signal.reason },
+          });
+        }, { once: true });
+      }
+    },
+  );
 
   try {
     do {
@@ -243,7 +306,9 @@ export async function waitForEvent<T extends StatusEvent<StatusEnum>, K extends 
 
       // Check if the operation was aborted
       if ((result as AbortedReadableStreamReadDoneResult)?.value?.aborted) {
-        return (result as AbortedReadableStreamReadDoneResult)?.value?.reason as Error | StatusEvent;
+        return (result as AbortedReadableStreamReadDoneResult)?.value?.reason as
+          | Error
+          | StatusEvent;
       }
 
       // Check if the event matches the desired type
@@ -282,4 +347,6 @@ export interface WaitForEventOptions {
  * This type is used internally by the `waitForEvent` function to manage abort signals.
  * @internal
  */
-export type AbortedReadableStreamReadDoneResult = ReadableStreamReadDoneResult<{ aborted: boolean, reason: unknown }>;
+export type AbortedReadableStreamReadDoneResult = ReadableStreamReadDoneResult<
+  { aborted: boolean; reason: unknown }
+>;

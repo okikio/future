@@ -1,3 +1,4 @@
+import type { WithDisposable } from "./disposal.ts";
 import type { Future } from "./future.ts";
 
 import { splitIter, splitIterBy } from "./iter.ts";
@@ -25,12 +26,21 @@ import { from } from "./from.ts";
  */
 export function split<V, E, TReturn = unknown>(
   future: Future<V, TReturn>,
-): readonly [Future<V, TReturn>, Future<E, undefined>] {
-  const [resolvedIterator, erroredIterator] = splitIter<V, E, TReturn>(future);
-  return [
-    from<V, TReturn>(resolvedIterator),
+): readonly [Future<V, undefined>, Future<E, undefined>] & WithDisposable {
+  const _split = splitIter<V, E, TReturn>(future);
+
+  const [resolvedIterator, erroredIterator] = _split;
+  return Object.assign([
+    from<V, undefined>(resolvedIterator),
     from<E, undefined>(erroredIterator),
-  ] as const;
+  ] as const, {
+    [Symbol.dispose]() {
+      _split[Symbol.dispose]();
+    },
+    [Symbol.asyncDispose]() {
+      return _split[Symbol.asyncDispose]();
+    }
+  });
 }
 
 /**
@@ -60,13 +70,22 @@ export function split<V, E, TReturn = unknown>(
 export function splitBy<T, F, VReturn = unknown>(
   future: Future<T | F, VReturn>,
   predicate: (value: T | F) => boolean | PromiseLike<boolean>,
-): readonly [Future<T, VReturn | undefined>, Future<F, VReturn | undefined>] {
-  const [matchedIterator, nonMatchedIterator] = splitIterBy<T, F, VReturn>(
+): readonly [Future<T, VReturn | undefined>, Future<F, VReturn | undefined>] & WithDisposable {
+  const _split = splitIterBy<T, F, VReturn>(
     future,
     predicate,
   );
-  return [
-    from<T, VReturn | undefined>(matchedIterator),
-    from<F, VReturn | undefined>(nonMatchedIterator),
-  ] as const;
+
+  const [matchedIterator, nonMatchedIterator] = _split;
+  return Object.assign([
+    from<T, undefined>(matchedIterator),
+    from<F, undefined>(nonMatchedIterator),
+  ] as const, {
+    [Symbol.dispose]() {
+      _split[Symbol.dispose]();
+    },
+    [Symbol.asyncDispose]() {
+      return _split[Symbol.asyncDispose]();
+    }
+  });
 }

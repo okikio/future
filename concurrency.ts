@@ -152,12 +152,12 @@ export function withConcurrencyLimit<T, TReturn, TNext>(
   futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<T | TReturn>>,
   limit: number,
 ): Future<T | TReturn, T | TReturn | undefined, TNext> {
-  // Check if the input is an async iterator, sync iterator, or iterable
-  // We use Symbol.asyncIterator and Symbol.iterator to distinguish between different types
-  const iterator = futures?.[Symbol.iterator]?.();
-
   return new Future<T | TReturn, T | TReturn | undefined, TNext>(
     async function* () {
+      // Check if the input is an async iterator, sync iterator, or iterable
+      // We use Symbol.asyncIterator and Symbol.iterator to distinguish between different types
+      const iterator = futures?.[Symbol.iterator]?.();
+      
       // If no valid iterator was found, throw an error indicating that the input is not iterable or an iterator
       if (
         (iterator ?? null) === null ||

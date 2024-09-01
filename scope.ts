@@ -57,11 +57,11 @@ import { Future } from "./future.ts";
 export function scope<T, TReturn, TNext>(
   futures: Iterable<Future<T, TReturn, TNext>>,
 ): Future<T, TReturn, TNext> {
-  // Check if the input is iterable
-  const iterator = futures?.[Symbol.iterator]?.();
-
   // Iterate over the iterable/async iterable futures in a controlled manner
   return new Future<T, TReturn, TNext>(async function* () {
+    // Check if the input is iterable
+    const iterator = futures?.[Symbol.iterator]?.();
+
     // If no valid iterator was found, throw an error indicating that the input is not iterable or an iterator
     if (
       (iterator ?? null) === null ||

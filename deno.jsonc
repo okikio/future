@@ -1,6 +1,6 @@
 {
   "icon": "📊",
-  "name": "@okikio/logger",
+  "name": "@okikio/future",
   "version": "0.0.0",
   "description": "Flexible, structured logging built on @logtape/logtape-—powerful, zero-dependency, and ready for any runtime.",
   "keywords": [
@@ -30,17 +30,20 @@
     "./from": "./from.ts",
     "./scope": "./scope.ts",
     "./background": "./background.ts",
-    "./concurrent": "./concurrent.ts",
+    "./concurrency": "./concurrency.ts",
     "./resolvers": "./resolvers.ts",
     "./deadline": "./deadline.ts",
+    "./abortable": "./disposal.ts",
     "./errors": "./errors.ts",
     "./idle": "./idle.ts",
     "./split": "./split.ts",
     "./channel": "./channel.ts",
+    "./events": "./events.ts",
+    "./disposal": "./disposal.ts",
     "./iter": "./iter.ts",
     "./utils": "./utils.ts",
     "./status": "./status.ts",
-    "./deno.jsonc": "./deno.jsonc"
+    "./stream": "./stream.ts"
   },
   "imports": {
     "@libs/testing": "jsr:@libs/testing@^2.2.3",

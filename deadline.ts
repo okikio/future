@@ -22,29 +22,46 @@ export function withDeadline<T, TReturn, TNext>(
   ms: number,
 ): Future<T | TReturn, T | TReturn, TNext> {
   return new Future<T | TReturn, T | TReturn, TNext>(async function* () {
-    const { promise: timeout, reject } = Promise.withResolvers<void>();
-    throw new Error("Future timed out");
+    const timeoutId = setTimeout(() => {
+      future.cancel(new Error("Future timed out"));
+      clearTimeout(timeoutId);
+    }, ms);
 
-    // const timeoutId = setTimeout(() => {
-    //   reject(new Error("Future timed out"));
-    // }, ms);
+    try {
+      return yield* future;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  });
+}
 
-    // try {
-    // const result = Promise.race([future.toPromise(), timeout]) as Promise<T | TReturn>;
-    // yield result;
-    // return result;
-    // } catch (error) {
-    //   // future.cancel(error);
-    //   console.log({
-    //     error,
-    //     future
-    //   })
-    //   // throw error;
+/**
+ * Creates a `Future` that resolves after a specified delay.
+ *
+ * @param ms - The delay in milliseconds before the future resolves.
+ * @param value - The value to resolve with after the delay. Defaults to `undefined`.
+ * @returns A future that resolves after the specified delay.
+ *
+ * @example
+ * ```typescript
+ * const delayedFuture = delay(1000, "Hello, world!");
+ * const result = await delayedFuture.toPromise(); // Resolves to "Hello, world!" after 1 second
+ * ```
+ */
+export function delay<T = unknown>(ms: number, value?: T): Future<T, T> {
+  return new Future<T, T>(async function* (abort) {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const { promise, resolve } = Promise.withResolvers<T>();
 
-    //   // yield future;
-    //   // return future;
-    // } finally {
-    //   clearTimeout(timeoutId);
-    // }
+    try {
+      timeoutId = setTimeout(resolve, ms, value);
+      abort.signal.throwIfAborted();
+
+      yield promise;
+      return promise;
+    } finally {
+      // Ensure that the timeout is cleared if the future is canceled
+      clearTimeout(timeoutId);
+    }
   });
 }

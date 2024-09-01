@@ -9,20 +9,20 @@ export const Status = {
 
 export type StatusEnum = typeof Status[keyof typeof Status];
 
-
 /**
  * Custom event for different statuses in the application, extending from CustomEvent.
  *
  * @template T - The specific status of the event.
  * @template TDetail - The detailed data associated with the event.
  */
-export class StatusEvent<T extends StatusEnum = typeof Status.Idle, TDetail = unknown>
-  extends CustomEvent<TDetail> {
+export class StatusEvent<
+  T extends StatusEnum = typeof Status.Idle,
+  TDetail = unknown,
+> extends CustomEvent<TDetail> {
   constructor(public status = Status.Idle as T, detail?: TDetail) {
     super("status", { detail: Object.assign({}, detail) });
   }
 }
-
 
 /**
  * A map defining the specific StatusEvent detail types for each status.
