@@ -1,5 +1,10 @@
 import type { WithDisposable } from "./disposal.ts";
-import { asyncIteratorToStream, splitByStream, splitStream, streamToAsyncIterator } from "./stream.ts";
+import {
+  asyncIteratorToStream,
+  splitByStream,
+  splitStream,
+  streamToAsyncIterator,
+} from "./stream.ts";
 
 /**
  * Splits a source iterator or iterable into two separate async iterators: one for valid values and one for errors encountered during iteration.
@@ -53,13 +58,15 @@ export function splitIter<V, E = V, TReturn = unknown>(
     | Iterable<V>
     | AsyncIterator<V, TReturn>
     | Iterator<V, TReturn>,
-): readonly [
-  AsyncGenerator<V, undefined>,
-  AsyncGenerator<E, undefined>,
-] & WithDisposable {
+):
+  & readonly [
+    AsyncGenerator<V, undefined>,
+    AsyncGenerator<E, undefined>,
+  ]
+  & WithDisposable {
   // Convert the source to a ReadableStream
   const sourceStream = asyncIteratorToStream(
-    source as AsyncIterator<V, TReturn | undefined>
+    source as AsyncIterator<V, TReturn | undefined>,
   );
 
   // Split the stream into valid and error streams
@@ -74,10 +81,10 @@ export function splitIter<V, E = V, TReturn = unknown>(
     [Symbol.dispose]() {
       split[Symbol.dispose]();
     },
-    [Symbol.asyncDispose]() { 
+    [Symbol.asyncDispose]() {
       return split[Symbol.asyncDispose]();
-    }
-  });;
+    },
+  });
 }
 
 /**
@@ -137,13 +144,15 @@ export function splitIterBy<T, F = unknown, VReturn = unknown>(
     | AsyncIterator<T | F, VReturn>
     | Iterator<T | F, VReturn>,
   predicate: (value: T | F) => boolean | PromiseLike<boolean>,
-): readonly [
-  AsyncGenerator<T, undefined>,
-  AsyncGenerator<F, undefined>,
-] & WithDisposable {
+):
+  & readonly [
+    AsyncGenerator<T, undefined>,
+    AsyncGenerator<F, undefined>,
+  ]
+  & WithDisposable {
   // Convert the source to a ReadableStream
   const sourceStream = asyncIteratorToStream(
-    source as AsyncIterator<T | F, VReturn | undefined>
+    source as AsyncIterator<T | F, VReturn | undefined>,
   );
 
   // Split the stream based on the predicate
@@ -161,8 +170,8 @@ export function splitIterBy<T, F = unknown, VReturn = unknown>(
     [Symbol.dispose]() {
       split[Symbol.dispose]();
     },
-    [Symbol.asyncDispose]() { 
+    [Symbol.asyncDispose]() {
       return split[Symbol.asyncDispose]();
-    }
+    },
   });
 }

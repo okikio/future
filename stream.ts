@@ -168,7 +168,9 @@ export function iteratorToStream<T>(iterator: Iterator<T>): ReadableStream<T> {
  */
 export function splitStream<V, E = unknown>(
   source: ReadableStream<V>,
-): readonly [ReadableStreamWithDisposal<V>, ReadableStreamWithDisposal<E>] & WithDisposable {
+):
+  & readonly [ReadableStreamWithDisposal<V>, ReadableStreamWithDisposal<E>]
+  & WithDisposable {
   // Create channels for valid values and errors
   const validChannel = createChannel<V>();
   const errorChannel = createChannel<E>();
@@ -188,23 +190,26 @@ export function splitStream<V, E = unknown>(
       // Close both channels when the stream is done
       validChannel.close();
       errorChannel.close();
-    }
+    },
   });
 
   // Pipe the source through the transformer
   source.pipeThrough(transformer);
 
   // Return the two readable streams wrapped with disposables
-  return Object.assign([validChannel.readable, errorChannel.readable] as const, {
-    [Symbol.dispose]() {
-      validChannel[Symbol.dispose]();
-      errorChannel[Symbol.dispose]();
+  return Object.assign(
+    [validChannel.readable, errorChannel.readable] as const,
+    {
+      [Symbol.dispose]() {
+        validChannel[Symbol.dispose]();
+        errorChannel[Symbol.dispose]();
+      },
+      async [Symbol.asyncDispose]() {
+        await validChannel[Symbol.asyncDispose]();
+        await errorChannel[Symbol.asyncDispose]();
+      },
     },
-    async [Symbol.asyncDispose]() {
-      await validChannel[Symbol.asyncDispose]();
-      await errorChannel[Symbol.asyncDispose]();
-    },
-  });
+  );
 }
 
 /**
@@ -254,7 +259,9 @@ export function splitStream<V, E = unknown>(
 export function splitByStream<T, F = unknown>(
   source: ReadableStream<T | F>,
   predicate: (chunk: T | F) => boolean | PromiseLike<boolean>,
-): readonly [ReadableStreamWithDisposal<T>, ReadableStreamWithDisposal<F>] & WithDisposable {
+):
+  & readonly [ReadableStreamWithDisposal<T>, ReadableStreamWithDisposal<F>]
+  & WithDisposable {
   // Create channels for true and false predicate results
   const trueChannel = createChannel<T>();
   const falseChannel = createChannel<F>();
@@ -273,7 +280,7 @@ export function splitByStream<T, F = unknown>(
       // Close both channels when the stream is done
       trueChannel.close();
       falseChannel.close();
-    }
+    },
   });
 
   // Pipe the source through the transformer
@@ -291,4 +298,3 @@ export function splitByStream<T, F = unknown>(
     },
   });
 }
-

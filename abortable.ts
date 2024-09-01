@@ -60,14 +60,17 @@ export function withAbortable<T, TReturn, TNext>(
   future: Future<T, TReturn, TNext>,
   abort: AbortController | AbortSignal,
 ): Future<T | TReturn, T | TReturn, TNext> {
-  let abortController: AbortController | null =
-    abort instanceof AbortController ? abort : null;
+  let abortController: AbortController | null = abort instanceof AbortController
+    ? abort
+    : null;
   let abortSignal: AbortSignal | null = abort instanceof AbortController
     ? abort.signal
     : abort;
 
   const abortHandler: EventListenerOrEventListenerObject = {
-    handleEvent() { future.cancel(abortSignal?.reason); },
+    handleEvent() {
+      future.cancel(abortSignal?.reason);
+    },
   };
 
   return new Future<T | TReturn, T | TReturn, TNext>(async function* () {

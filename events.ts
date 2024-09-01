@@ -1,11 +1,11 @@
-import type { StatusEnum, StatusEvent } from "./status.ts";
 import type { ReadableStreamWithDisposal } from "./disposal.ts";
+import type { StatusEnum, StatusEvent } from "./status.ts";
 import { createChannel } from "./channel.ts";
 
 /**
  * This module provides functionality for creating and managing status event dispatchers using the Web Streams API.
  * It allows for efficient broadcasting of status events to multiple listeners with proper handling of backpressure and synchronization.
- * 
+ *
  * @module
  */
 

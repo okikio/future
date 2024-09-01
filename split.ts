@@ -30,17 +30,20 @@ export function split<V, E, TReturn = unknown>(
   const _split = splitIter<V, E, TReturn>(future);
 
   const [resolvedIterator, erroredIterator] = _split;
-  return Object.assign([
-    from<V, undefined>(resolvedIterator),
-    from<E, undefined>(erroredIterator),
-  ] as const, {
-    [Symbol.dispose]() {
-      _split[Symbol.dispose]();
+  return Object.assign(
+    [
+      from<V, undefined>(resolvedIterator),
+      from<E, undefined>(erroredIterator),
+    ] as const,
+    {
+      [Symbol.dispose]() {
+        _split[Symbol.dispose]();
+      },
+      [Symbol.asyncDispose]() {
+        return _split[Symbol.asyncDispose]();
+      },
     },
-    [Symbol.asyncDispose]() {
-      return _split[Symbol.asyncDispose]();
-    }
-  });
+  );
 }
 
 /**
@@ -70,22 +73,27 @@ export function split<V, E, TReturn = unknown>(
 export function splitBy<T, F, VReturn = unknown>(
   future: Future<T | F, VReturn>,
   predicate: (value: T | F) => boolean | PromiseLike<boolean>,
-): readonly [Future<T, VReturn | undefined>, Future<F, VReturn | undefined>] & WithDisposable {
+):
+  & readonly [Future<T, VReturn | undefined>, Future<F, VReturn | undefined>]
+  & WithDisposable {
   const _split = splitIterBy<T, F, VReturn>(
     future,
     predicate,
   );
 
   const [matchedIterator, nonMatchedIterator] = _split;
-  return Object.assign([
-    from<T, undefined>(matchedIterator),
-    from<F, undefined>(nonMatchedIterator),
-  ] as const, {
-    [Symbol.dispose]() {
-      _split[Symbol.dispose]();
+  return Object.assign(
+    [
+      from<T, undefined>(matchedIterator),
+      from<F, undefined>(nonMatchedIterator),
+    ] as const,
+    {
+      [Symbol.dispose]() {
+        _split[Symbol.dispose]();
+      },
+      [Symbol.asyncDispose]() {
+        return _split[Symbol.asyncDispose]();
+      },
     },
-    [Symbol.asyncDispose]() {
-      return _split[Symbol.asyncDispose]();
-    }
-  });
+  );
 }
