@@ -49,6 +49,21 @@ await Promise.all([
       console.log("Future", { e });
     }
   })(),
+  (async () => {
+    try {
+      const iterator = Future.withConcurrencyLimit([
+        Future.from(gen),
+        Future.inBackground(Future.from(gen)),
+      ], 2);
+      // setTimeout(() => iterator.cancel(), 1000);
+
+      for await (const value of iterator) {
+        console.log("Concurrent Value:", value);
+      }
+    } catch (e) {
+      console.log("Future", { e });
+    }
+  })(),
 ]);
 
 console.log("Done!!!");
