@@ -1,4 +1,4 @@
-import type { WithDisposable } from "./disposal.ts";
+import type { DualDisposable } from "./types.ts";
 import type { Future } from "./future.ts";
 
 import { splitIter, splitIterBy } from "./iter.ts";
@@ -26,7 +26,7 @@ import { from } from "./from.ts";
  */
 export function split<V, E, TReturn = unknown>(
   future: Future<V, TReturn>,
-): readonly [Future<V, undefined>, Future<E, undefined>] & WithDisposable {
+): readonly [Future<V, undefined>, Future<E, undefined>] & DualDisposable {
   const _split = splitIter<V, E, TReturn>(future);
 
   const [resolvedIterator, erroredIterator] = _split;
@@ -75,7 +75,7 @@ export function splitBy<T, F, VReturn = unknown>(
   predicate: (value: T | F) => boolean | PromiseLike<boolean>,
 ):
   & readonly [Future<T, VReturn | undefined>, Future<F, VReturn | undefined>]
-  & WithDisposable {
+  & DualDisposable {
   const _split = splitIterBy<T, F, VReturn>(
     future,
     predicate,

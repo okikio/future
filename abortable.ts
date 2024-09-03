@@ -67,23 +67,24 @@ export function withAbortable<T, TReturn, TNext>(
     ? abort.signal
     : abort;
 
-  const abortHandler: EventListenerOrEventListenerObject = {
-    handleEvent() {
-      future.cancel(abortSignal?.reason);
-    },
-  };
+  return new Future<T | TReturn, T | TReturn, TNext>(async function* (_, stack) {
+    const _future = stack.use(future);
+    const abortHandler: EventListenerOrEventListenerObject = {
+      handleEvent() {
+        _future?.cancel?.(abortSignal?.reason);
+      },
+    };
 
-  return new Future<T | TReturn, T | TReturn, TNext>(async function* () {
     try {
       // If the signal is already aborted, cancel the future immediately
-      if (abortSignal?.aborted && !future.is(Status.Cancelled)) {
-        future.cancel(abortSignal?.reason);
+      if (abortSignal?.aborted && !_future?.is(Status.Cancelled)) {
+        _future?.cancel(abortSignal?.reason);
       } else {
         // Otherwise, attach the abort listener
         abortSignal?.addEventListener?.("abort", abortHandler, { once: true });
       }
 
-      return yield* future;
+      return yield* _future;
     } finally {
       // Clean up the event listener
       abortSignal?.removeEventListener?.("abort", abortHandler);

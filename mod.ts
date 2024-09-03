@@ -1,3 +1,5 @@
+export type * from "./types.ts";
+
 export * from "./future.ts";
 export * from "./from.ts";
 export * from "./scope.ts";

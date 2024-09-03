@@ -1,3 +1,4 @@
+import { useDisposableStack } from "./disposal.ts";
 import { Future } from "./future.ts";
 
 /**
@@ -56,9 +57,9 @@ import { Future } from "./future.ts";
  */
 export function scope<T, TReturn, TNext>(
   futures: Iterable<Future<T, TReturn, TNext>>,
-): Future<T, TReturn, TNext> {
+): Future<T, (T | TReturn)[], TNext> {
   // Iterate over the iterable/async iterable futures in a controlled manner
-  return new Future<T, TReturn, TNext>(async function* () {
+  return new Future<T, (T | TReturn)[], TNext>(async function* (_, stack) {
     // Check if the input is iterable
     const iterator = futures?.[Symbol.iterator]?.();
 
@@ -75,12 +76,13 @@ export function scope<T, TReturn, TNext>(
 
     // Handle the async generator or generator in a pull-based workflow
     let result: IteratorResult<Future<T, TReturn, TNext>>;
+    const finalResults: ( TReturn)[] = []
 
     // Start the iteration
     while (!(result = iterator.next()).done) {
-      yield yield* result.value;
+      finalResults.push(yield* useDisposableStack(result.value, stack));
     }
 
-    return yield* result.value;
+    return finalResults;
   });
 }

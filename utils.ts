@@ -51,3 +51,11 @@ export function isIterator<T, TReturn, TNext>(
 ): obj is Iterator<T, TReturn, TNext> {
   return typeof obj?.next === "function";
 }
+
+export function isDisposable(obj: any): obj is Disposable {
+  return typeof obj?.[Symbol.dispose] === "function";
+}
+
+export function isAsyncDisposable(obj: any): obj is AsyncDisposable {
+  return typeof obj?.[Symbol.asyncDispose] === "function";
+}

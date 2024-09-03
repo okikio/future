@@ -1,7 +1,3 @@
-import type { ReadableStreamWithDisposal } from "./disposal.ts";
-import type { StatusEnum, StatusEvent } from "./status.ts";
-import { createChannel } from "./channel.ts";
-
 /**
  * This module provides functionality for creating and managing status event dispatchers using the Web Streams API.
  * It allows for efficient broadcasting of status events to multiple listeners with proper handling of backpressure and synchronization.
@@ -9,50 +5,9 @@ import { createChannel } from "./channel.ts";
  * @module
  */
 
-/**
- * Represents the return type of the `createStatusEventDispatcher` function.
- *
- * This interface defines the structure of the dispatcher object, which includes methods for dispatching events,
- * accessing the readable stream of events, and managing the lifecycle of the dispatcher.
- */
-export interface StatusEventDispatcher {
-  /**
-   * Dispatches a status event to the channel.
-   *
-   * @param event - The status event to dispatch.
-   * @returns A promise that resolves when the event has been dispatched.
-   */
-  dispatch(event: StatusEvent<StatusEnum>): Promise<void>;
-
-  /**
-   * Provides a new readable stream that can be used with `for await...of`
-   * to listen to status events.
-   *
-   * @returns A new readable stream of StatusEvents.
-   */
-  readonly events: ReadableStreamWithDisposal<StatusEvent<StatusEnum>>;
-
-  /**
-   * Closes the event dispatcher, terminating all streams.
-   *
-   * @returns `void`
-   */
-  close(): void;
-
-  /**
-   * Disposes of the dispatcher, releasing resources.
-   *
-   * @returns `void`
-   */
-  [Symbol.dispose](): void;
-
-  /**
-   * Disposes of the dispatcher asynchronously, releasing resources.
-   *
-   * @returns A promise that resolves when the disposal is complete.
-   */
-  [Symbol.asyncDispose](): Promise<void>;
-}
+import type { ReadableStreamWithDisposal } from "./types.ts";
+import type { StatusEnum, StatusEvent } from "./status.ts";
+import { createChannel } from "./channel.ts";
 
 /**
  * Creates a status event dispatcher that allows dispatching and listening to status events
@@ -324,6 +279,51 @@ export async function waitForEvent<
   if (throwOnNoMatch) {
     throw new Error(`Stream ended without receiving event of type: ${type}`);
   }
+}
+
+/**
+ * Represents the return type of the `createStatusEventDispatcher` function.
+ *
+ * This interface defines the structure of the dispatcher object, which includes methods for dispatching events,
+ * accessing the readable stream of events, and managing the lifecycle of the dispatcher.
+ */
+export interface StatusEventDispatcher {
+  /**
+   * Dispatches a status event to the channel.
+   *
+   * @param event - The status event to dispatch.
+   * @returns A promise that resolves when the event has been dispatched.
+   */
+  dispatch(event: StatusEvent<StatusEnum>): Promise<void>;
+
+  /**
+   * Provides a new readable stream that can be used with `for await...of`
+   * to listen to status events.
+   *
+   * @returns A new readable stream of StatusEvents.
+   */
+  readonly events: ReadableStreamWithDisposal<StatusEvent<StatusEnum>>;
+
+  /**
+   * Closes the event dispatcher, terminating all streams.
+   *
+   * @returns `void`
+   */
+  close(): void;
+
+  /**
+   * Disposes of the dispatcher, releasing resources.
+   *
+   * @returns `void`
+   */
+  [Symbol.dispose](): void;
+
+  /**
+   * Disposes of the dispatcher asynchronously, releasing resources.
+   *
+   * @returns A promise that resolves when the disposal is complete.
+   */
+  [Symbol.asyncDispose](): Promise<void>;
 }
 
 /**

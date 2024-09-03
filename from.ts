@@ -1,5 +1,6 @@
-import type { FutureOperation } from "./future.ts";
+import type { FutureFromOperation } from "./types.ts";
 
+import { useDisposableStack } from "./disposal.ts";
 import {
   isAsyncGenerator,
   isAsyncIterable,
@@ -11,12 +12,6 @@ import {
   isPromiseLike,
 } from "./utils.ts";
 import { Future } from "./future.ts";
-
-export interface FutureFromOperation<T, TReturn, TNext> {
-  (
-    abort: AbortController,
-  ): ReturnType<FutureOperation<T, TReturn, TNext>> | PromiseLike<T> | T;
-}
 
 /**
  * Creates a `Future` from an operation, such as an async generator, a promise-like object,
@@ -210,16 +205,18 @@ export function from<T, TReturn = T, TNext = unknown>(
 }
 
 export function of<T>(value: T): Future<T, T> {
-  return new Future<T, T>(async function* () {
-    yield value;
-    return value;
+  return new Future<T, T>(async function* (_, stack) {
+    const disposable = useDisposableStack(value, stack);
+    yield disposable;
+    return disposable;
   });
 }
 
 export function fromPromise<T>(promise: PromiseLike<T>): Future<T, T> {
-  return new Future<T, T>(async function* () {
-    yield promise;
-    return promise;
+  return new Future<T, T>(async function* (_, stack) {
+    const disposable = useDisposableStack(promise, stack);
+    yield disposable;
+    return disposable;
   });
 }
 
@@ -227,8 +224,8 @@ export function fromOperation<T, TReturn = T, TNext = unknown>(
   operation: FutureFromOperation<T, TReturn, TNext>,
 ): Future<T, TReturn, TNext> {
   return new Future<T, TReturn, TNext>(
-    async function* (abort: AbortController) {
-      const result = operation(abort);
+    async function* (abort, stack) {
+      const result = operation(abort, stack);
 
       if (isAsyncGenerator(result) || isGenerator(result)) {
         // Handle async iterable or iterable result
@@ -251,17 +248,19 @@ export function fromOperation<T, TReturn = T, TNext = unknown>(
 export function fromIterable<T, TReturn = T>(
   iterable: AsyncIterable<T> | Iterable<T | PromiseLike<T>>,
 ): Future<T, TReturn> {
-  return new Future<T, TReturn>(async function* () {
-    return yield* iterable;
+  return new Future<T, TReturn>(async function* (_, stack) {
+    const disposable = useDisposableStack(iterable, stack);
+    return yield* disposable;
   });
 }
 
 export function fromBuiltinIterable<T>(
   iterable: Iterable<T | PromiseLike<T>>,
 ): Future<T, Iterable<T | PromiseLike<T>>> {
-  return new Future<T, Iterable<T | PromiseLike<T>>>(async function* () {
-    yield* iterable;
-    return iterable;
+  return new Future<T, Iterable<T | PromiseLike<T>>>(async function* (_, stack) {
+    const disposable = useDisposableStack(iterable, stack);
+    yield* disposable;
+    return disposable;
   });
 }
 
@@ -273,7 +272,9 @@ export function fromIterator<T, TReturn = T, TNext = unknown>(
   return new Future<T, TReturn, TNext>(async function* () {
     let iteratorResult = await iterator.next();
     while (!iteratorResult.done) {
-      iteratorResult = await iterator.next(yield iteratorResult.value);
+      iteratorResult = await iterator.next(
+        yield iteratorResult.value
+      );
     }
 
     return iteratorResult.value;
@@ -314,8 +315,8 @@ export function fromIterator<T, TReturn = T, TNext = unknown>(
  * ```
  */
 export function fromStream<T>(stream: ReadableStream<T>): Future<T, undefined> {
-  return new Future<T, undefined>(async function* () {
-    const reader = stream.getReader();
+  return new Future<T, undefined>(async function* (_, stack) {
+    const reader = useDisposableStack(stream, stack).getReader();
 
     try {
       while (true) {
@@ -339,7 +340,7 @@ export function fromStream<T>(stream: ReadableStream<T>): Future<T, undefined> {
 /**
  * Creates a new `Future` instance from an async generator function.
  * @param value - A function that returns an async generator to define the asynchronous task.
- * @returns A new `Future` instance.   *
+ * @returns A new `Future` instance.
  */
 export function is<T, TReturn = unknown, TNext = unknown>(
   value: unknown,

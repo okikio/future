@@ -21,11 +21,13 @@ import { cancelIdle, idle } from "./idle.ts";
 export function inBackground<T, TReturn, TNext>(
   future: Future<T, TReturn, TNext>,
 ): Future<T, T | TReturn, TNext> {
-  // Check if the input is iterable
-  const generator = future?.[Symbol.asyncIterator]?.();
-
   // Iterate over the iterable/async iterable futures in a controlled manner
-  return new Future<T, T | TReturn, TNext>(async function* () {
+  return new Future<T, T | TReturn, TNext>(async function* (_, stack) {
+    const _future = stack.use(future);
+    
+    // Check if the input is iterable
+    const generator = _future?.[Symbol.asyncIterator]?.();
+
     // If no valid iterator was found, throw an error indicating that the input is not iterable or an iterator
     if (
       (generator ?? null) === null ||

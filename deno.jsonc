@@ -29,6 +29,7 @@
     "./future": "./future.ts",
     "./from": "./from.ts",
     "./scope": "./scope.ts",
+    "./constants": "./constants.ts",
     "./background": "./background.ts",
     "./concurrency": "./concurrency.ts",
     "./resolvers": "./resolvers.ts",
@@ -47,6 +48,7 @@
   },
   "imports": {
     "@libs/testing": "jsr:@libs/testing@^2.2.3",
+    "@nick/dispose": "jsr:@nick/dispose@^1.1.0",
     "@std/expect": "jsr:@std/expect@^1.0.0",
     "@std/testing": "jsr:@std/testing@^1.0.0"
   },

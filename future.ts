@@ -1,4 +1,5 @@
 /// <reference lib="dom" />
+import type { FutureOperation } from "./types.ts";
 import type {
   StatusEnum,
   StatusEventDetailMap,
@@ -8,14 +9,9 @@ import type {
 import { createStatusEventDispatcher, waitForEvent } from "./events.ts";
 import { Status, StatusEvent } from "./status.ts";
 import { CancellationError } from "./errors.ts";
-import { timeout } from "./disposal.ts";
 
-/**
- * The timeout to use when `generator.return` is called to ensure cleanup logic is executed.
- * The reason for this timeout is to prevent the generator from hanging indefinitely,
- * if the cleanup logic fails to complete or gets stuck.
- */
-export const GENERATOR_RETURN_TIMEOUT = 1_000;
+import { timeout, AsyncDisposableStack } from "./disposal.ts";
+import { GENERATOR_RETURN_TIMEOUT } from "./constants.ts";
 
 /**
  * The `Future` class is a more powerful and flexible alternative to JavaScript's native `Promise`,
@@ -86,6 +82,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   #abort: AbortController | null = null;
 
   #status: StatusEnum = Status.Idle;
+  readonly #disposables = new AsyncDisposableStack();
   readonly #events = createStatusEventDispatcher();
 
   /**
@@ -100,7 +97,10 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
 
     this.#abort = abort;
     this.#operation = operation;
-    this.#generator = this.#wrapper(this.#operation);
+    this.#generator = this.#wrapper(
+      this.#operation,
+      this.#disposables
+    );
   }
 
   is(id: StatusEnum): boolean {
@@ -232,6 +232,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
 
   dispose(): void {
     this.cancel();
+    this.#disposables?.disposeAsync?.();
 
     this.#abort?.signal?.removeEventListener?.("abort", this.#eventhandler);
     this.#eventhandler?.dispose?.();
@@ -253,6 +254,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
 
   async [Symbol.asyncDispose](): Promise<void> {
     await this.cancel();
+    await this.#disposables?.disposeAsync?.();
 
     this.#abort?.signal?.removeEventListener?.("abort", this.#eventhandler);
     this.#eventhandler?.dispose?.();
@@ -370,12 +372,16 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
    */
   async *#wrapper(
     operation: FutureOperation<T, TReturn, TNext>,
+    disposables: AsyncDisposableStack = this.#disposables,
   ): AsyncGenerator<T, T | TReturn, TNext> {
     let result: IteratorResult<T, T | TReturn> | undefined;
 
     try {
       // Create generator.
-      const generator = this.#createGenerator(operation);
+      const generator = this.#createGenerator(
+        operation,
+        disposables
+      );
 
       // Continue yielding values until the generator completes.
       do {
@@ -428,6 +434,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   /** Helper method to initialize the generator. */
   #createGenerator(
     operation: FutureOperation<T, TReturn, TNext>,
+    disposables: AsyncDisposableStack = this.#disposables,
   ): AsyncGenerator<T, T | TReturn, TNext> | Generator<T, T | TReturn, TNext> {
     // Reset abort controller if already aborted.
     if (this.#abort?.signal?.aborted) {
@@ -440,7 +447,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
       once: true,
     });
 
-    const generator = operation?.(this.#abort!);
+    const generator = operation?.(this.#abort!, disposables);
     if (!generator || typeof generator?.next !== "function") {
       throw new Error("Generator not defined");
     }
@@ -696,15 +703,13 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
     [Symbol.dispose](): void {
       this.dispose();
     }
+
+    [Symbol.asyncDispose](): Promise<void> {
+      return Promise.resolve(this.dispose());
+    }
   };
 
   #eventhandler = new Future.#PrivateEventHandler(this);
-}
-
-export interface FutureOperation<T, TReturn, TNext> {
-  (
-    abort: AbortController,
-  ): AsyncGenerator<T, TReturn, TNext> | Generator<T, TReturn, TNext>;
 }
 
 export default Future;

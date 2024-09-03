@@ -1,4 +1,4 @@
-import type { WithDisposable } from "./disposal.ts";
+import type { DualDisposable } from "./types.ts";
 import {
   asyncIteratorToStream,
   splitByStream,
@@ -63,7 +63,7 @@ export function splitIter<V, E = V, TReturn = unknown>(
     AsyncGenerator<V, undefined>,
     AsyncGenerator<E, undefined>,
   ]
-  & WithDisposable {
+  & DualDisposable {
   // Convert the source to a ReadableStream
   const sourceStream = asyncIteratorToStream(
     source as AsyncIterator<V, TReturn | undefined>,
@@ -149,7 +149,7 @@ export function splitIterBy<T, F = unknown, VReturn = unknown>(
     AsyncGenerator<T, undefined>,
     AsyncGenerator<F, undefined>,
   ]
-  & WithDisposable {
+  & DualDisposable {
   // Convert the source to a ReadableStream
   const sourceStream = asyncIteratorToStream(
     source as AsyncIterator<T | F, VReturn | undefined>,
