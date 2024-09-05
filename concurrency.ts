@@ -240,7 +240,7 @@ export function some<T, TReturn, TNext>(
  * console.log(finalResults); // Logs the contents of the files as an array
  * ```
  */
-export function withConcurrencyLimit<T, TReturn, TNext>(
+export function withConcurrencyLimit<T, TReturn = T, TNext = unknown>(
   futures: Iterable<Future<T, TReturn, TNext>>,
   limit: number,
 ): Future<T, (T | TReturn)[], TNext> {
@@ -324,7 +324,7 @@ export function withConcurrencyLimit<T, TReturn, TNext>(
           nextFuture = iterator.next();
         }
 
-        const newFuture = nextFuture.value;
+        const newFuture: Future<T, TReturn, TNext> = nextFuture.value;
         const hasMetadata = metadata.has(newFuture);
         const getMetadata = metadata.get(newFuture);
         if (!getMetadata?.done) {

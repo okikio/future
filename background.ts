@@ -24,44 +24,35 @@ export function inBackground<T, TReturn, TNext>(
   // Iterate over the iterable/async iterable futures in a controlled manner
   return new Future<T, T | TReturn, TNext>(async function* (_, stack) {
     const _future = stack.use(future);
-    
-    // Check if the input is iterable
-    const generator = _future?.[Symbol.asyncIterator]?.();
 
     // If no valid iterator was found, throw an error indicating that the input is not iterable or an iterator
     if (
-      (generator ?? null) === null ||
-      typeof (generator as AsyncGenerator<T, TReturn, TNext>)?.next !==
-        "function"
+      (_future ?? null) === null ||
+      typeof _future?.next !== "function"
     ) throw new TypeError("The provided input is not a future.");
 
-    let idleResolver: PromiseWithResolvers<void> | null = Promise.withResolvers<
-      void
-    >();
+    let idleResolver: PromiseWithResolvers<void> | null = Promise.withResolvers<void>();
     let idleId = idle(() => idleResolver?.resolve?.());
 
     try {
-      await idleResolver.promise;
-      cancelIdle(idleId);
-
       // Handle the async generator or generator in a pull-based workflow
-      let result = await generator.next();
-
-      idleResolver = Promise.withResolvers<void>();
-      idleId = idle(() => idleResolver?.resolve?.());
+      let result: IteratorResult<T, T | TReturn> | null = null;
 
       // Start the iteration
-      while (!result.done) {
+      do {
         await idleResolver.promise;
         cancelIdle(idleId);
 
-        result = await generator.next(yield result.value);
+        // Handle the async generator or generator in a pull-based workflow
+        result = result ? 
+          await _future?.next?.(yield result?.value) : 
+          await _future?.next?.();
 
         idleResolver = Promise.withResolvers<void>();
         idleId = idle(() => idleResolver?.resolve?.());
-      }
+      } while (!result?.done);
 
-      return result.value;
+      return result?.value;
     } finally {
       idleResolver = null;
       cancelIdle(idleId);

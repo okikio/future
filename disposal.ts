@@ -12,21 +12,23 @@
 
 import type {
   AbortablePromiseWithDisposal,
-  ReadableStreamWithDisposal,
+  EnhancedReadableStream,
   PromiseWithDisposal,
   WithDisposal,
+  ReadableStreamReaderWithDisposal,
 } from "./types.ts";
 import { isAsyncDisposable, isAsyncIterable, isDisposable, isIterable } from "./utils.ts";
 
 import { AsyncDisposableStack as _AsyncDisposableStackPolyfill } from "@nick/dispose/async-disposable-stack";
 import { DisposableStack as _DisposableStackPollyfill } from "@nick/dispose/disposable-stack";
 
-export const AsyncDisposableStack = "AsyncDisposableStack" in globalThis ?
-  globalThis.AsyncDisposableStack :
-  _AsyncDisposableStackPolyfill;
-export const DisposableStack = "DisposableStack" in globalThis ?
-  globalThis.DisposableStack :
-  _DisposableStackPollyfill;
+export const AsyncDisposableStack = "AsyncDisposableStack" in globalThis
+  ? globalThis.AsyncDisposableStack
+  : _AsyncDisposableStackPolyfill;
+
+export const DisposableStack = "DisposableStack" in globalThis
+  ? globalThis.DisposableStack
+  : _DisposableStackPollyfill;
 
 /**
  * A WeakMap that stores the `ReadableStreamDefaultReader` for a given `ReadableStream`.
@@ -36,7 +38,7 @@ export const DisposableStack = "DisposableStack" in globalThis ?
  */
 export const ReadableStreamReaderMap: WeakMap<
   ReadableStream<unknown>,
-  ReadableStreamReader<unknown>
+  ReadableStreamReaderWithDisposal<unknown>
 > = new WeakMap();
 
 /**
@@ -46,7 +48,7 @@ export const ReadableStreamReaderMap: WeakMap<
  * their lifecycle and ensuring that resources are cleaned up appropriately when streams are
  * disposed of.
  */
-export const ReadableStreamReaderSet: Set<ReadableStream<unknown>> = new Set();
+export const ReadableStreamSet: Set<ReadableStream<unknown>> = new Set();
 
 /**
  * Wraps a `ReadableStream` and adds `Symbol.dispose` and `Symbol.asyncDispose` methods
@@ -82,10 +84,10 @@ export const ReadableStreamReaderSet: Set<ReadableStream<unknown>> = new Set();
  * disposableStream[Symbol.dispose]();
  * ```
  */
-export function withDisposal<T>(
+export function enhanceReadableStream<T>(
   stream: ReadableStream<T>,
-): ReadableStreamWithDisposal<T> {
-  const { getReader, cancel } = stream;
+): EnhancedReadableStream<T> {
+  const { getReader: streamGetReader, cancel: streamCancel } = stream;
 
   return Object.assign(stream, {
     /**
@@ -96,36 +98,36 @@ export function withDisposal<T>(
      * @returns The `ReadableStreamDefaultReader` associated with the stream.
      */
     getReader(
-      this: ReadableStream<T>,
+      this: EnhancedReadableStream<T>,
       ...args: Parameters<ReadableStream<T>["getReader"]>
     ) {
-      const reader = ReadableStreamReaderMap.get(this) ??
-        getReader.apply(this, args);
+      const hasReader = ReadableStreamReaderMap.has(this);
+      let reader: ReadableStreamReaderWithDisposal<T>;
 
-      if (!ReadableStreamReaderMap.has(this)) {
-        const { releaseLock } = reader;
-
-        ReadableStreamReaderMap.set(
-          this,
-          Object.assign(reader, {
-            /**
-             * Overrides the default `releaseLock` method to remove the reader from the map
-             * when it is no longer needed.
-             *
-             * @param args - Arguments passed to the original `releaseLock` method.
-             * @returns The result of the original `releaseLock` method.
-             */
-            releaseLock(
-              ...args: Parameters<ReadableStreamReader<T>["releaseLock"]>
-            ) {
-              ReadableStreamReaderMap.delete(stream);
-              return releaseLock.apply(reader, args);
-            },
-          }),
-        );
+      // Check if we already have a reader for this stream, or create a new one
+      if (hasReader) {
+        reader = ReadableStreamReaderMap.get(this)!;
+      } else {
+        const rawReader = streamGetReader.apply(this, args);
+        reader = enhanceReaderWithDisposal(this as ReadableStream<T>, rawReader);
+        ReadableStreamReaderMap.set(this, reader);
       }
 
       return reader;
+    },
+
+    async *[Symbol.asyncIterator](this: EnhancedReadableStream<T>) {
+      const reader = this.getReader();
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          yield value;
+        }
+      } finally {
+        reader.releaseLock(); // Release the lock when done
+      }
     },
 
     /**
@@ -135,9 +137,10 @@ export function withDisposal<T>(
      * @param reason - The reason for canceling the stream.
      * @returns A promise that resolves when the stream has been canceled.
      */
-    cancel(this: ReadableStream<T>, reason?: unknown) {
-      ReadableStreamReaderSet.delete(this);
-      return cancel.call(this, reason);
+    async cancel(this: ReadableStream<T>, ...args: Parameters<ReadableStream<T>["cancel"]>) {
+      const result = await streamCancel.apply(this, args)
+      ReadableStreamSet.delete(this);
+      return result;
     },
 
     /**
@@ -148,11 +151,13 @@ export function withDisposal<T>(
      *
      * @param reason - The reason for disposing of the stream.
      */
-    [Symbol.dispose](this: ReadableStream<T>, reason?: unknown) {
+    [Symbol.dispose](this: EnhancedReadableStream<T>, reason?: unknown) {
       if (this.locked) {
-        this.getReader().releaseLock(); // Explicitly release the lock
+        // If the stream is locked, get the reader and explicitly release the lock
+        this.getReader()?.[Symbol.dispose]?.();
       }
 
+      // If the stream is not locked, just cancel the stream directly
       this.cancel(reason);
     },
 
@@ -165,13 +170,52 @@ export function withDisposal<T>(
      * @param reason - The reason for disposing of the stream.
      * @returns A promise that resolves when the disposal is complete.
      */
-    async [Symbol.asyncDispose](this: ReadableStream<T>, reason?: unknown) {
+    async [Symbol.asyncDispose](this: EnhancedReadableStream<T>, reason?: unknown) {
       if (this.locked) {
-        this.getReader().releaseLock(); // Explicitly release the lock
+        // If the stream is locked, get the reader and explicitly release the lock
+        await this.getReader()?.[Symbol.asyncDispose]?.();
       }
 
+      // If the stream is not locked, just cancel the stream directly
       await this.cancel(reason);
+    }
+  }) as EnhancedReadableStream<T>; // Explicit cast to WrappedReadableStream<T>
+}
+
+/**
+ * Enhances a `ReadableStreamDefaultReader` or `ReadableStreamBYOBReader` by adding
+ * synchronous and asynchronous disposal methods.
+ *
+ * @param reader - The reader to enhance with disposal capabilities.
+ * @returns The enhanced reader with disposal methods.
+ */
+export function enhanceReaderWithDisposal<T>(
+  stream: ReadableStream<T>,
+  reader: ReadableStreamReader<T>
+): ReadableStreamReaderWithDisposal<T> {
+  const { cancel: readerCancel, releaseLock: readerReleaseLock } = reader;
+  return Object.assign(reader, {
+    releaseLock(this: ReadableStreamReaderWithDisposal<T>, ...args: Parameters<ReadableStreamReader<T>["releaseLock"]>) {
+      const result = readerReleaseLock.apply(this, args);
+      ReadableStreamReaderMap.delete(stream); // Assuming `this.stream` holds the reference to the stream
+      return result;
     },
+
+    async cancel(this: ReadableStreamReaderWithDisposal<T>, ...args: Parameters<ReadableStreamReader<T>["cancel"]>) {
+      const result = await readerCancel.apply(this, args);
+      ReadableStreamReaderMap.delete(stream);
+      return result;
+    },
+
+    [Symbol.dispose](this: ReadableStreamReaderWithDisposal<T>, ...args: Parameters<ReadableStreamReader<T>["cancel"]>) {
+      this.cancel(...args);
+      this.releaseLock();
+    },
+
+    async [Symbol.asyncDispose](this: ReadableStreamReaderWithDisposal<T>, ...args: Parameters<ReadableStreamReader<T>["cancel"]>) {
+      await this.cancel(...args);
+      this.releaseLock();
+    }
   });
 }
 

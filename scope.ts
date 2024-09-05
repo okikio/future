@@ -76,7 +76,7 @@ export function scope<T, TReturn, TNext>(
 
     // Handle the async generator or generator in a pull-based workflow
     let result: IteratorResult<Future<T, TReturn, TNext>>;
-    const finalResults: ( TReturn)[] = []
+    const finalResults: (T | TReturn)[] = []
 
     // Start the iteration
     while (!(result = iterator.next()).done) {

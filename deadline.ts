@@ -21,14 +21,15 @@ export function withDeadline<T, TReturn, TNext>(
   future: Future<T, TReturn, TNext>,
   ms: number,
 ): Future<T | TReturn, T | TReturn, TNext> {
-  return new Future<T | TReturn, T | TReturn, TNext>(async function* () {
+  return new Future<T | TReturn, T | TReturn, TNext>(async function* (_, stack) {
+    const _future = stack.use(future);
     const timeoutId = setTimeout(() => {
-      future.cancel(new Error("Future timed out"));
+      _future.cancel(new Error("Future timed out"));
       clearTimeout(timeoutId);
     }, ms);
 
     try {
-      return yield* future;
+      return yield* _future;
     } finally {
       clearTimeout(timeoutId);
     }

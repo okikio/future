@@ -1,10 +1,10 @@
 import type {
   Channel,
   BidirectionalChannel,
-  ReadableStreamWithDisposal,
+  EnhancedReadableStream,
 } from "./types.ts";
 
-import { ReadableStreamReaderSet, withDisposal } from "./disposal.ts";
+import { ReadableStreamSet, enhanceReadableStream } from "./disposal.ts";
 
 /**
  * Creates a unidirectional communication channel built on Web Streams, allowing data to flow from one or more writers to multiple independent readers.
@@ -139,7 +139,9 @@ import { ReadableStreamReaderSet, withDisposal } from "./disposal.ts";
 export function createChannel<T>(): Channel<T> {
   const transformStream = new TransformStream<T, T>();
   const sharedWriter = transformStream.writable.getWriter();
-  let readableStream = transformStream.readable;
+  const readableStream = transformStream.readable;
+
+  let enhancedReadableStream = enhanceReadableStream(readableStream);
 
   return {
     /**
@@ -161,13 +163,15 @@ export function createChannel<T>(): Channel<T> {
      *
      * @returns A new readable stream with disposal support.
      */
-    get readable(): ReadableStreamWithDisposal<T> {
-      const [branch1, branch2] = readableStream.tee();
-      readableStream = branch2; // Keep one branch for further teeing
-      ReadableStreamReaderSet.add(readableStream);
+    get readable(): EnhancedReadableStream<T> {
+      const [branch1, branch2] = enhancedReadableStream.tee();
 
-      const wrappedBranch1 = withDisposal(branch1);
-      ReadableStreamReaderSet.add(wrappedBranch1);
+      const wrappedBranch1 = enhanceReadableStream(branch1);
+      ReadableStreamSet.add(wrappedBranch1);
+      enhancedReadableStream = wrappedBranch1; // Keep one branch for further teeing
+
+      const wrappedBranch2 = enhanceReadableStream(branch2);
+      ReadableStreamSet.add(wrappedBranch2);
       return wrappedBranch1;
     },
 
@@ -176,16 +180,21 @@ export function createChannel<T>(): Channel<T> {
      */
     close() {
       sharedWriter.close(); // Close the writable stream
-      ReadableStreamReaderSet.forEach((reader) => {
-        if (reader.locked) {
-          reader.getReader().releaseLock(); // Release the reader lock
+      ReadableStreamSet.forEach((stream) => {
+        if (stream.locked) {
+          stream.getReader().releaseLock(); // Release the reader lock
         }
 
         // Cancel all readable branches
-        return reader.cancel();
+        return stream.cancel();
       });
 
-      ReadableStreamReaderSet.clear(); // Clear the set of readers
+      if (readableStream.locked) {
+        readableStream.getReader().releaseLock(); // Release the reader lock
+      }
+
+      readableStream.cancel();
+      ReadableStreamSet.clear(); // Clear the set of readers
     },
 
     /**
@@ -203,7 +212,7 @@ export function createChannel<T>(): Channel<T> {
     async [Symbol.asyncDispose]() {
       await sharedWriter.close();
       await Promise.all(
-        Array.from(ReadableStreamReaderSet).map((reader) => {
+        Array.from(ReadableStreamSet, reader => {
           if (reader.locked) {
             reader.getReader().releaseLock(); // Release the reader lock
           }
@@ -213,7 +222,12 @@ export function createChannel<T>(): Channel<T> {
         }),
       );
 
-      ReadableStreamReaderSet.clear();
+      if (readableStream.locked) {
+        readableStream.getReader().releaseLock(); // Release the reader lock
+      }
+
+      readableStream.cancel();
+      ReadableStreamSet.clear(); // Clear the set of readers
     },
   };
 }

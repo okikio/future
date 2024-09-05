@@ -81,6 +81,9 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   #operation?: FutureOperation<T, TReturn, TNext> | null;
   #abort: AbortController | null = null;
 
+  #current: T | null = null;
+  #resolved: T | TReturn | undefined | null = null;
+  
   #status: StatusEnum = Status.Idle;
   readonly #disposables = new AsyncDisposableStack();
   readonly #events = createStatusEventDispatcher();
@@ -191,8 +194,14 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
       throw new Error("Cannot reset an incomplete future");
     }
 
+    this.#current = null;
+    this.#resolved = null;
+
     this.#setStatus(Status.Idle);
-    this.#generator = this.#wrapper(this.#operation!);
+    this.#generator = this.#wrapper(
+      this.#operation!,
+      this.#disposables
+    );
     return this;
   }
 
@@ -231,6 +240,9 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   }
 
   dispose(): void {
+    this.#current = null;
+    this.#resolved = null;
+
     this.cancel();
     this.#disposables?.disposeAsync?.();
 
@@ -253,6 +265,9 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
+    this.#current = null;
+    this.#resolved = null;
+
     await this.cancel();
     await this.#disposables?.disposeAsync?.();
 
@@ -402,6 +417,10 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
             generator,
             result ? yield result?.value! as T : undefined,
           );
+
+          if (!result?.done) {
+            this.#current = result?.value;
+          }
         } catch (error) {
           // Handle error and attempt early return from generator.
           const returnedResult = await this.#handleError(generator);
@@ -421,6 +440,8 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
       // Rethrow the error to ensure it's handled upstream
       throw error;
     } finally {
+      this.#resolved = result?.value;
+
       // Dispatch the completed event.
       this.#events.dispatch(
         new StatusEvent(
@@ -632,14 +653,14 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
 
     // Iterate through the generator until completion
     do {
-      result = await this.#generator?.next?.() as IteratorResult<
+      result = await this.next() as IteratorResult<
         T,
         T | TReturn
       >;
     } while (!result.done);
 
     // If the generator has no explicit return, result.value will be undefined
-    return result!.value;
+    return (result!.value ?? this.#resolved ?? undefined) as T | TReturn;
   }
 
   /**
@@ -683,6 +704,43 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   finally(onfinally?: (() => void) | undefined | null): Promise<T | TReturn> {
     return this.toPromise().finally(onfinally);
   }
+
+  // /**
+  //  * Converts the Future instance to a JSON representation.
+  //  * This is useful for logging or debugging, providing insight into the Future's status and values.
+  //  *
+  //  * @returns An object with the Future's status, current value, and resolved value.
+  //  */
+  // toJSON(): object {
+  //   return {
+  //     FutureState: this.getStatus(),
+  //     FutureResult: this.#resolved ?? '<pending>',
+  //     FutureCurrent: this.#current,
+  //   };
+  // }
+
+  // /**
+  //  * Returns the primitive value representation of the Future.
+  //  * If the Future is resolved, returns the resolved value; otherwise, returns null.
+  //  *
+  //  * @returns The resolved value of the Future, or null if not resolved.
+  //  */
+  // valueOf(): T | TReturn | null {
+  //   return this.#resolved ?? this.#current ?? null;
+  // }
+
+  // /**
+  //  * Returns a string representation of the Future.
+  //  * This is useful for debugging or logging, providing a human-readable description of the Future's state.
+  //  *
+  //  * @returns A string describing the Future's status, current value, and resolved value.
+  //  */
+  // toString(): string {
+  //   const state = this.#status;
+  //   const result = this.#resolved ?? '<pending>';
+  //   return `Future { [${state}]: ${result}, [Current]: ${this.#current} }`;
+  //   // return `Future { status: ${this.getStatus()}, current: ${this.#current}, resolved: ${this.#resolved} }`;
+  // }
 
   static #PrivateEventHandler = class PrivateEventHandler<T, TReturn, TNext> {
     #delegate: Future<T, TReturn, TNext> | undefined | null;

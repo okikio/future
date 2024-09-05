@@ -53,8 +53,8 @@
     "@std/testing": "jsr:@std/testing@^1.0.0"
   },
   "tasks": {
-    "test": "deno test --clean --trace-leaks",
+    "test": "deno test -RW --allow-run=deno,bun,node,npx --clean --trace-leaks",
     "dev": "deno task test --filter='/^\\[deno\\]/'",
-    "test:deno-future": "DENO_FUTURE=1 && deno task test:deno"
+    "test:deno-future": "DENO_FUTURE=2 && deno task test"
   }
 }

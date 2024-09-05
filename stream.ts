@@ -1,4 +1,4 @@
-import type { ReadableStreamWithDisposal, DualDisposable } from "./types.ts";
+import type { EnhancedReadableStream, DualDisposable } from "./types.ts";
 import { createChannel } from "./channel.ts";
 
 /**
@@ -169,7 +169,7 @@ export function iteratorToStream<T>(iterator: Iterator<T>): ReadableStream<T> {
 export function splitStream<V, E = unknown>(
   source: ReadableStream<V>,
 ):
-  & readonly [ReadableStreamWithDisposal<V>, ReadableStreamWithDisposal<E>]
+  & readonly [EnhancedReadableStream<V>, EnhancedReadableStream<E>]
   & DualDisposable {
   // Create channels for valid values and errors
   const validChannel = createChannel<V>();
@@ -260,7 +260,7 @@ export function splitByStream<T, F = unknown>(
   source: ReadableStream<T | F>,
   predicate: (chunk: T | F) => boolean | PromiseLike<boolean>,
 ):
-  & readonly [ReadableStreamWithDisposal<T>, ReadableStreamWithDisposal<F>]
+  & readonly [EnhancedReadableStream<T>, EnhancedReadableStream<F>]
   & DualDisposable {
   // Create channels for true and false predicate results
   const trueChannel = createChannel<T>();

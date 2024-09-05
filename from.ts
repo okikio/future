@@ -269,10 +269,12 @@ export function fromIterator<T, TReturn = T, TNext = unknown>(
     | AsyncIterator<T, TReturn, TNext>
     | Iterator<T | PromiseLike<T>, TReturn | PromiseLike<TReturn>, TNext>,
 ): Future<T, TReturn> {
-  return new Future<T, TReturn, TNext>(async function* () {
-    let iteratorResult = await iterator.next();
+  return new Future<T, TReturn, TNext>(async function* (_, stack) {
+    const _iterator = useDisposableStack(iterator, stack);
+    
+    let iteratorResult = await _iterator.next();
     while (!iteratorResult.done) {
-      iteratorResult = await iterator.next(
+      iteratorResult = await _iterator.next(
         yield iteratorResult.value
       );
     }
@@ -316,7 +318,8 @@ export function fromIterator<T, TReturn = T, TNext = unknown>(
  */
 export function fromStream<T>(stream: ReadableStream<T>): Future<T, undefined> {
   return new Future<T, undefined>(async function* (_, stack) {
-    const reader = useDisposableStack(stream, stack).getReader();
+    const _stream = useDisposableStack(stream, stack);
+    const reader = _stream.getReader();
 
     try {
       while (true) {

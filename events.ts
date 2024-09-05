@@ -5,7 +5,7 @@
  * @module
  */
 
-import type { ReadableStreamWithDisposal } from "./types.ts";
+import type { EnhancedReadableStream } from "./types.ts";
 import type { StatusEnum, StatusEvent } from "./status.ts";
 import { createChannel } from "./channel.ts";
 
@@ -129,7 +129,7 @@ export function createStatusEventDispatcher(): StatusEventDispatcher {
      *
      * @returns A new readable stream of StatusEvents.
      */
-    get events(): ReadableStreamWithDisposal<StatusEvent<StatusEnum>> {
+    get events(): EnhancedReadableStream<StatusEvent<StatusEnum>> {
       return channel.readable;
     },
 
@@ -150,8 +150,8 @@ export function createStatusEventDispatcher(): StatusEventDispatcher {
     /**
      * Disposes of the dispatcher asynchronously, releasing resources.
      */
-    async [Symbol.asyncDispose]() {
-      await this[Symbol.asyncDispose]();
+    [Symbol.asyncDispose]() {
+      return Promise.resolve(this[Symbol.dispose]());
     },
   };
 }
@@ -302,7 +302,7 @@ export interface StatusEventDispatcher {
    *
    * @returns A new readable stream of StatusEvents.
    */
-  readonly events: ReadableStreamWithDisposal<StatusEvent<StatusEnum>>;
+  readonly events: EnhancedReadableStream<StatusEvent<StatusEnum>>;
 
   /**
    * Closes the event dispatcher, terminating all streams.

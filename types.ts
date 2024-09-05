@@ -67,6 +67,7 @@ export interface DualDisposable extends Disposable, AsyncDisposable { }
  */
 export type WithDisposal<T> = T & (Disposable | AsyncDisposable | DualDisposable);
 
+
 /**
  * An interface representing a `ReadableStream` with added disposal capabilities.
  * This interface extends the `ReadableStream` and includes methods for both
@@ -74,8 +75,26 @@ export type WithDisposal<T> = T & (Disposable | AsyncDisposable | DualDisposable
  *
  * @template T - The type of data in the `ReadableStream`.
  */
-export interface ReadableStreamWithDisposal<T>
-  extends ReadableStream<T>, DualDisposable { }
+export interface ReadableStreamDefaultReaderWithDisposal<T> extends ReadableStreamDefaultReader<T>, DualDisposable { }
+export interface ReadableStreamBYOBReaderWithDisposal extends ReadableStreamBYOBReader, DualDisposable { }
+export type ReadableStreamReaderWithDisposal<T> = ReadableStreamDefaultReaderWithDisposal<T> | ReadableStreamBYOBReaderWithDisposal;
+
+
+/**
+ * An interface representing a `ReadableStream` with added disposal capabilities.
+ * This interface extends the `ReadableStream` and includes methods for both
+ * synchronous and asynchronous disposal of the stream.
+ *
+ * @template T - The type of data in the `ReadableStream`.
+ */
+export interface ReadableStreamWithDisposal<T> extends ReadableStream<T>, DualDisposable { }
+
+export type EnhancedReadableStream<T> = Omit<ReadableStreamWithDisposal<T>, "getReader"> & {
+  getReader(options: { mode: "byob" }): ReadableStreamBYOBReaderWithDisposal;
+  getReader(): ReadableStreamDefaultReaderWithDisposal<T>;
+  getReader(options?: ReadableStreamGetReaderOptions): ReadableStreamReaderWithDisposal<T>;
+  getReader(...args: Parameters<ReadableStream<T>["getReader"]>): ReadableStreamReaderWithDisposal<T>;
+}
 
 /**
  * A `PromiseWithDisposable` is an extension of the standard `Promise` interface, designed to include
@@ -173,7 +192,7 @@ export interface Channel<T> {
    *
    * @returns A new readable stream with disposal support.
    */
-  readonly readable: ReadableStreamWithDisposal<T>;
+  readonly readable: EnhancedReadableStream<T>;
 
   /**
    * Closes the channel by closing the shared writer and canceling all branches of the readable stream.
@@ -205,7 +224,7 @@ export interface BidirectionalChannel<TRequest, TResponse> {
    */
   readonly endpointA: {
     readonly writer: WritableStreamDefaultWriter<TRequest>;
-    readonly readable: ReadableStreamWithDisposal<TResponse>;
+    readonly readable: EnhancedReadableStream<TResponse>;
   };
 
   /**
@@ -213,7 +232,7 @@ export interface BidirectionalChannel<TRequest, TResponse> {
    */
   readonly endpointB: {
     readonly writer: WritableStreamDefaultWriter<TResponse>;
-    readonly readable: ReadableStreamWithDisposal<TRequest>;
+    readonly readable: EnhancedReadableStream<TRequest>;
   };
 
   /**
