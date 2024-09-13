@@ -7,7 +7,7 @@
 
 import type { EnhancedReadableStream } from "./types.ts";
 import type { StatusEnum, StatusEvent } from "./status.ts";
-import { createChannel } from "./channel.ts";
+import { createChannel } from "./_channel.ts";
 
 /**
  * Creates a status event dispatcher that allows dispatching and listening to status events
@@ -144,14 +144,14 @@ export function createStatusEventDispatcher(): StatusEventDispatcher {
      * Disposes of the dispatcher, releasing resources.
      */
     [Symbol.dispose]() {
-      this.close();
+      channel[Symbol.dispose]();
     },
 
     /**
      * Disposes of the dispatcher asynchronously, releasing resources.
      */
     [Symbol.asyncDispose]() {
-      return Promise.resolve(this[Symbol.dispose]());
+      return channel[Symbol.asyncDispose]();
     },
   };
 }

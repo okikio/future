@@ -4,7 +4,7 @@ import {
   splitByStream,
   splitStream,
   streamToAsyncIterator,
-} from "./stream.ts";
+} from "./_stream.ts";
 
 /**
  * Splits a source iterator or iterable into two separate async iterators: one for valid values and one for errors encountered during iteration.

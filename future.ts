@@ -190,10 +190,14 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
       throw new Error("Cannot reset a destroyed future");
     }
 
-    if (!this.is(Status.Completed)) {
-      throw new Error("Cannot reset an incomplete future");
+    if (!(
+      this.is(Status.Completed) ||
+      this.is(Status.Cancelled)
+    )) {
+      throw new Error("Cannot reset a running or incomplete future");
     }
 
+    this.#generator = null;
     this.#current = null;
     this.#resolved = null;
 
@@ -232,57 +236,39 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
     const eventPromise = waitForEvent(events, Status.Cancelled);
 
     await Promise.all([
-      eventPromise,
+      Promise.race([
+        eventPromise,
+        timeout(GENERATOR_RETURN_TIMEOUT),
+      ]),
       this.#abort?.abort?.(reason),
     ]);
 
     return await eventPromise;
   }
 
-  dispose(): void {
-    this.#current = null;
-    this.#resolved = null;
-
-    this.cancel();
-    this.#disposables?.disposeAsync?.();
-
-    this.#abort?.signal?.removeEventListener?.("abort", this.#eventhandler);
-    this.#eventhandler?.dispose?.();
-
-    // @ts-ignore Resetting private properties
-    this.#eventhandler = null as unknown;
-    this.#events?.close?.();
-
-    this.#abort = null;
-    this.#operation = null;
-    this.#generator = null;
-
-    this.#status = Status.Destroyed;
-  }
-
-  [Symbol.dispose](): void {
-    this.dispose();
-  }
-
-  async [Symbol.asyncDispose](): Promise<void> {
-    this.#current = null;
-    this.#resolved = null;
-
+  async dispose(): Promise<void> {
     await this.cancel();
     await this.#disposables?.disposeAsync?.();
 
     this.#abort?.signal?.removeEventListener?.("abort", this.#eventhandler);
-    this.#eventhandler?.dispose?.();
+    await this.#eventhandler?.[Symbol.asyncDispose]?.();
+    await this.#events?.[Symbol.asyncDispose]?.();
 
     // @ts-ignore Resetting private properties
     this.#eventhandler = null as unknown;
-    this.#events?.close?.();
 
     this.#abort = null;
     this.#operation = null;
     this.#generator = null;
 
+    this.#current = null;
+    this.#resolved = null;
+
     this.#status = Status.Destroyed;
+  }
+
+  [Symbol.asyncDispose](): Promise<void> {
+    return this.dispose();
   }
 
   /**
@@ -596,9 +582,9 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   }
 
   return(
-    value: T | TReturn | PromiseLike<T | TReturn>,
+    value?: T | TReturn | PromiseLike<T | TReturn>,
   ): PromiseLike<IteratorResult<T, T | TReturn>> {
-    return this.#generator!.return?.(value);
+    return this.#generator!.return?.(value!);
   }
 
   throw(e: unknown): PromiseLike<IteratorResult<T, T | TReturn>> {
@@ -650,6 +636,10 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
    */
   async toPromise(): Promise<T | TReturn> {
     let result: IteratorResult<T, T | TReturn>;
+
+    if (this.is(Status.Completed) && this.#resolved !== null) {
+      return this.#resolved as T | TReturn;
+    }
 
     // Iterate through the generator until completion
     do {
@@ -743,14 +733,17 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   // }
 
   static #PrivateEventHandler = class PrivateEventHandler<T, TReturn, TNext> {
-    #delegate: Future<T, TReturn, TNext> | undefined | null;
+    #delegate: WeakRef<Future<T, TReturn, TNext>> | undefined | null;
     constructor(delegate?: Future<T, TReturn, TNext>) {
-      this.#delegate = delegate;
+      if (delegate) {
+          this.#delegate = new WeakRef(delegate);
+      }
     }
 
     handleEvent(event: Event): void {
       if (this.#delegate) {
-        this.#delegate.#handleEvent(event);
+        const future = this.#delegate?.deref();
+        if (future) future.#handleEvent(event);
       }
     }
 

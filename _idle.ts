@@ -88,8 +88,10 @@ export function idle(
   const timeout = (options.timeout ??= IDLE_TIMEOUT);
 
   if (
-    "requestIdleCallback" in globalThis &&
-    "cancelIdleCallback" in globalThis
+    // @ts-ignore requestIdleCallback is not always available in all environments
+    ("requestIdleCallback" in globalThis && globalThis?.requestIdleCallback) &&
+    // @ts-ignore cancelIdleCallback is not always available in all environments
+    ("cancelIdleCallback" in globalThis && globalThis?.cancelIdleCallback)
   ) {
     // Use requestIdleCallback if available
     return globalThis?.requestIdleCallback?.(callback, options);
@@ -135,8 +137,10 @@ export function idle(
  */
 export function cancelIdle(handle: ReturnType<typeof idle>): void {
   if (
-    "requestIdleCallback" in globalThis &&
-    "cancelIdleCallback" in globalThis
+    // @ts-ignore requestIdleCallback is not always available in all environments
+    ("requestIdleCallback" in globalThis && globalThis?.requestIdleCallback) &&
+    // @ts-ignore cancelIdleCallback is not always available in all environments
+    ("cancelIdleCallback" in globalThis && globalThis?.cancelIdleCallback)
   ) {
     // Use cancelIdleCallback if available
     return globalThis?.cancelIdleCallback?.(

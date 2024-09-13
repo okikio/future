@@ -1,5 +1,5 @@
 import { Future } from "./future.ts";
-import { cancelIdle, idle } from "./idle.ts";
+import { cancelIdle, idle } from "./_idle.ts";
 
 /**
  * Sets up a `Future` to execute in the background during idle time.
@@ -23,7 +23,7 @@ export function inBackground<T, TReturn, TNext>(
 ): Future<T, T | TReturn, TNext> {
   // Iterate over the iterable/async iterable futures in a controlled manner
   return new Future<T, T | TReturn, TNext>(async function* (_, stack) {
-    const _future = stack.use(future);
+    const _future = future; // stack.use(future);
 
     // If no valid iterator was found, throw an error indicating that the input is not iterable or an iterator
     if (

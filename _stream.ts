@@ -1,5 +1,6 @@
 import type { EnhancedReadableStream, DualDisposable } from "./types.ts";
-import { createChannel } from "./channel.ts";
+import { createChannel } from "./_channel.ts";
+import { enhanceReadableStream } from "./disposal.ts";
 
 /**
  * Converts a ReadableStream into an Async Iterator.
@@ -210,6 +211,157 @@ export function splitStream<V, E = unknown>(
       },
     },
   );
+}
+
+/**
+ * Polyfill for `ReadableStream.tee()`
+ *
+ * This function splits a single `ReadableStream` (source stream) into two identical `ReadableStream` branches. 
+ * It allows two consumers to read from the same data stream without conflicting with each other. This is useful in situations where you want to "clone" the data flow from a stream so that multiple readers can consume the same data independently.
+ *
+ * ## What is a ReadableStream?
+ * A `ReadableStream` is a way to handle data in chunks. Think of it as a flow of information—like a stream of water—that can be read piece by piece. For example, it might be useful when downloading a file, streaming video, or processing data over time.
+ *
+ * ## Why Use this Polyfill?
+ * The native `ReadableStream.tee()` method is used to split a stream into two branches, but it doesn't work well with certain enhanced `ReadableStream` features, like custom readers that avoid locking errors. This polyfill makes sure that the stream works seamlessly with enhanced streams, preventing issues when multiple readers try to access the stream.
+ *
+ * By using an `async` loop (`for await...of`), this polyfill ensures that the source stream’s data is efficiently copied to two branches without locking errors.
+ *
+ * ## How it Works:
+ * - The original `ReadableStream` is the "source" stream, which provides chunks of data.
+ * - This function creates two new `ReadableStream` branches that each get the same data as the source.
+ * - These two streams can be consumed independently, meaning two separate parts of your application can read the same data at the same time.
+ *
+ * @template T - The type of data flowing through the streams.
+ * 
+ * @param source - The original `ReadableStream` that will be split into two.
+ * @returns [ReadableStream<T>, ReadableStream<T>] - An array containing two new streams that each receive the same data from the source stream.
+ * 
+ * @example
+ * ### Basic Example:
+ * Imagine you are receiving chunks of data over time from a file download, and you want to display it in two different places at once—one for the user to see and another for logging purposes. This function allows you to split the data into two streams, so both parts of your code can process the data.
+ *
+ * ```typescript
+ * const sourceStream = new ReadableStream({
+ *   start(controller) {
+ *     controller.enqueue("Chunk 1");
+ *     controller.enqueue("Chunk 2");
+ *     controller.close();
+ *   }
+ * });
+ *
+ * // Split the stream into two
+ * const [branch1, branch2] = streamTee(sourceStream);
+ *
+ * // Set up the first reader
+ * const reader1 = branch1.getReader();
+ * reader1.read().then(({ value }) => console.log("Stream 1 got:", value)); // Outputs: Chunk 1
+ *
+ * // Set up the second reader
+ * const reader2 = branch2.getReader();
+ * reader2.read().then(({ value }) => console.log("Stream 2 got:", value)); // Outputs: Chunk 1
+ * ```
+ * In this example, both `branch1` and `branch2` will receive the same chunks of data from the original stream.
+ * 
+ * @example
+ * ### Processing in Parallel:
+ * If you need two independent processes to handle the same stream of data, you can use `streamTee` to split it into two.
+ *
+ * ```typescript
+ * const logStream = new ReadableStream({
+ *   start(controller) {
+ *     controller.enqueue({ message: "Log entry 1" });
+ *     controller.enqueue({ message: "Log entry 2" });
+ *     controller.close();
+ *   }
+ * });
+ *
+ * // Split the logStream into two separate streams
+ * const [logStreamCopy1, logStreamCopy2] = streamTee(logStream);
+ *
+ * // Process the logs in parallel
+ * async function processLogs(reader: ReadableStreamDefaultReader) {
+ *   while (true) {
+ *     const { done, value } = await reader.read();
+ *     if (done) break;
+ *     console.log("Processing log:", value.message);
+ *   }
+ * }
+ *
+ * processLogs(logStreamCopy1.getReader()); // Outputs: Processing log: Log entry 1
+ * processLogs(logStreamCopy2.getReader()); // Outputs: Processing log: Log entry 1
+ * ```
+ * 
+ * @example
+ * ### Why Use `for await...of`?
+ * This polyfill uses `for await...of` to read chunks from the source stream. This approach automatically handles asynchronous reading of the stream's data, making it easy to write code that waits for each chunk to be available without needing complex recursive code or error handling.
+ *
+ * ```typescript
+ * const sourceStream = new ReadableStream({
+ *   start(controller) {
+ *     controller.enqueue('Data 1');
+ *     controller.enqueue('Data 2');
+ *     controller.close();
+ *   }
+ * });
+ * 
+ * const [branch1, branch2] = streamTee(sourceStream);
+ * 
+ * // Both streams will receive the same data
+ * (async () => {
+ *   for await (const chunk of branch1) {
+ *     console.log('Branch 1 received:', chunk);
+ *   }
+ * })();
+ * 
+ * (async () => {
+ *   for await (const chunk of branch2) {
+ *     console.log('Branch 2 received:', chunk);
+ *   }
+ * })();
+ * ```
+ * The `for await...of` loop makes it simple to continuously read from streams as data arrives. It works well for streams because it automatically waits for the next chunk of data before continuing, simplifying the logic for handling asynchronous data flow.
+ */
+export function streamTee<T>(source: ReadableStream<T>): [ReadableStream<T>, ReadableStream<T>] {
+  const branch1 = new TransformStream<T>();
+  const branch2 = new TransformStream<T>();
+
+  const writer1 = branch1.writable.getWriter();
+  const writer2 = branch2.writable.getWriter();
+
+  console.log({ source })
+
+  // Get the reader from the source stream
+  const reader = source.getReader();
+
+  // Manually read from the source stream and write to both branches
+  (async () => {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break; // Exit loop when stream is done
+        }
+
+        // Write the chunk to both branches
+        await Promise.all([
+          writer1.write(value),
+          writer2.write(value),
+        ]);
+      }
+    } catch (error) {
+      console.error("Error reading from the stream:", error);
+    } finally {
+      // Close both branches when the original stream ends
+      await Promise.all([
+        writer1.close(),
+        writer2.close(),
+      ]);
+    }
+  })();
+
+  return [branch1.readable, branch2.readable];
 }
 
 /**

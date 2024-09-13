@@ -5,6 +5,7 @@ import type {
 } from "./types.ts";
 
 import { ReadableStreamSet, enhanceReadableStream } from "./disposal.ts";
+import { streamTee } from "./_stream.ts";
 
 /**
  * Creates a unidirectional communication channel built on Web Streams, allowing data to flow from one or more writers to multiple independent readers.
@@ -141,7 +142,8 @@ export function createChannel<T>(): Channel<T> {
   const sharedWriter = transformStream.writable.getWriter();
   const readableStream = transformStream.readable;
 
-  let enhancedReadableStream = enhanceReadableStream(readableStream);
+  const enhancedReadableStream = enhanceReadableStream(readableStream);
+  let currentReadableStream = enhancedReadableStream;
 
   return {
     /**
@@ -164,11 +166,11 @@ export function createChannel<T>(): Channel<T> {
      * @returns A new readable stream with disposal support.
      */
     get readable(): EnhancedReadableStream<T> {
-      const [branch1, branch2] = enhancedReadableStream.tee();
+      const [branch1, branch2] = streamTee(currentReadableStream as ReadableStream<T>);
 
       const wrappedBranch1 = enhanceReadableStream(branch1);
       ReadableStreamSet.add(wrappedBranch1);
-      enhancedReadableStream = wrappedBranch1; // Keep one branch for further teeing
+      currentReadableStream = wrappedBranch1; // Keep one branch for further teeing
 
       const wrappedBranch2 = enhanceReadableStream(branch2);
       ReadableStreamSet.add(wrappedBranch2);
@@ -179,21 +181,28 @@ export function createChannel<T>(): Channel<T> {
      * Closes the channel by closing the shared writer and canceling all branches of the readable stream.
      */
     close() {
-      sharedWriter.close(); // Close the writable stream
-      ReadableStreamSet.forEach((stream) => {
-        if (stream.locked) {
-          stream.getReader().releaseLock(); // Release the reader lock
-        }
+      // sharedWriter.close(); // Close the writable stream
+      // ReadableStreamSet.forEach((stream) => {
+        // return stream[Symbol.dispose]();
 
-        // Cancel all readable branches
-        return stream.cancel();
-      });
+        // if (stream.locked) {
+        //   console.log({ dispose: stream[Symbol.dispose] })
+        //   stream.getReader().releaseLock(); // Release the reader lock
+        // }
 
-      if (readableStream.locked) {
-        readableStream.getReader().releaseLock(); // Release the reader lock
+        // // Cancel all readable branches
+        // return stream.cancel();
+      // });
+
+      console.log({
+        enhancedReadableStream: enhancedReadableStream
+      })
+      if (enhancedReadableStream.locked) {
+        const reader = enhancedReadableStream.getReader();
+        reader.releaseLock(); // Release the reader lock
       }
 
-      readableStream.cancel();
+      enhancedReadableStream.cancel();
       ReadableStreamSet.clear(); // Clear the set of readers
     },
 

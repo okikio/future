@@ -10,7 +10,7 @@ import {
   isIterable,
   isIterator,
   isPromiseLike,
-} from "./utils.ts";
+} from "./_utils.ts";
 import { Future } from "./future.ts";
 
 /**

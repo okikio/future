@@ -1,8 +1,8 @@
 import type { DualDisposable } from "./types.ts";
 import type { Future } from "./future.ts";
 
-import { splitIter, splitIterBy } from "./iter.ts";
-import { from } from "./from.ts";
+import { splitIter, splitIterBy } from "./_iter.ts";
+import { fromIterator } from "./from.ts";
 
 /**
  * Splits a Future into two futures: one for resolved values and one for errors.
@@ -32,8 +32,8 @@ export function split<V, E, TReturn = unknown>(
   const [resolvedIterator, erroredIterator] = _split;
   return Object.assign(
     [
-      from<V, undefined>(resolvedIterator),
-      from<E, undefined>(erroredIterator),
+      fromIterator<V, undefined>(resolvedIterator),
+      fromIterator<E, undefined>(erroredIterator),
     ] as const,
     {
       [Symbol.dispose]() {
@@ -84,8 +84,8 @@ export function splitBy<T, F, VReturn = unknown>(
   const [matchedIterator, nonMatchedIterator] = _split;
   return Object.assign(
     [
-      from<T, undefined>(matchedIterator),
-      from<F, undefined>(nonMatchedIterator),
+      fromIterator<T, undefined>(matchedIterator),
+      fromIterator<F, undefined>(nonMatchedIterator),
     ] as const,
     {
       [Symbol.dispose]() {

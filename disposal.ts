@@ -17,7 +17,7 @@ import type {
   WithDisposal,
   ReadableStreamReaderWithDisposal,
 } from "./types.ts";
-import { isAsyncDisposable, isAsyncIterable, isDisposable, isIterable } from "./utils.ts";
+import { isAsyncDisposable, isAsyncIterable, isDisposable, isIterable } from "./_utils.ts";
 
 import { AsyncDisposableStack as _AsyncDisposableStackPolyfill } from "@nick/dispose/async-disposable-stack";
 import { DisposableStack as _DisposableStackPollyfill } from "@nick/dispose/disposable-stack";
@@ -48,7 +48,7 @@ export const ReadableStreamReaderMap: WeakMap<
  * their lifecycle and ensuring that resources are cleaned up appropriately when streams are
  * disposed of.
  */
-export const ReadableStreamSet: Set<ReadableStream<unknown>> = new Set();
+export const ReadableStreamSet: Set<EnhancedReadableStream<unknown>> = new Set();
 
 /**
  * Wraps a `ReadableStream` and adds `Symbol.dispose` and `Symbol.asyncDispose` methods
@@ -137,7 +137,7 @@ export function enhanceReadableStream<T>(
      * @param reason - The reason for canceling the stream.
      * @returns A promise that resolves when the stream has been canceled.
      */
-    async cancel(this: ReadableStream<T>, ...args: Parameters<ReadableStream<T>["cancel"]>) {
+    async cancel(this: EnhancedReadableStream<T>, ...args: Parameters<ReadableStream<T>["cancel"]>) {
       const result = await streamCancel.apply(this, args)
       ReadableStreamSet.delete(this);
       return result;
@@ -152,9 +152,14 @@ export function enhanceReadableStream<T>(
      * @param reason - The reason for disposing of the stream.
      */
     [Symbol.dispose](this: EnhancedReadableStream<T>, reason?: unknown) {
+      console.log({
+        "this.locked": this.locked,
+      })
       if (this.locked) {
         // If the stream is locked, get the reader and explicitly release the lock
-        this.getReader()?.[Symbol.dispose]?.();
+        const reader = this.getReader();
+        reader?.cancel();
+        reader?.releaseLock?.();
       }
 
       // If the stream is not locked, just cancel the stream directly
@@ -173,7 +178,9 @@ export function enhanceReadableStream<T>(
     async [Symbol.asyncDispose](this: EnhancedReadableStream<T>, reason?: unknown) {
       if (this.locked) {
         // If the stream is locked, get the reader and explicitly release the lock
-        await this.getReader()?.[Symbol.asyncDispose]?.();
+        const reader = this.getReader();
+        await reader?.cancel();
+        reader?.releaseLock?.();
       }
 
       // If the stream is not locked, just cancel the stream directly
@@ -429,18 +436,31 @@ export function abortable(
     },
   });
 }
+/**
+ * Options for configuring the timeout behavior.
+ *
+ * @param reject - Whether the promise should reject (true) or resolve (false) after the timeout. Default is `true` (reject).
+ * @param abort - An optional `AbortController` or `AbortSignal` to allow for early cancellation of the timeout.
+ */
+export interface TimeoutOptions {
+  /**
+   * @default true
+   */
+  reject?: boolean;
+  abort?: AbortController | AbortSignal;
+}
 
 /**
- * Creates a promise that rejects after a specified timeout and supports disposal.
+ * Creates a promise that either rejects or resolves after a specified timeout and supports disposal and aborting.
  *
  * @remarks
- * This function is useful for enforcing time limits on asynchronous operations. If the operation takes longer than the specified timeout, the promise will be rejected. It also supports an optional abort signal to allow for early cancellation.
+ * This function is useful for enforcing time limits on asynchronous operations. If the operation takes longer than the specified timeout, the promise will either resolve or reject based on the provided options. It also supports an optional abort signal to allow for early cancellation.
  *
- * @param ms - The number of milliseconds to wait before rejecting the promise.
- * @param abort - An optional `AbortController` or `AbortSignal` to allow for early cancellation of the timeout.
- * @returns A `PromiseWithDisposable` that rejects after the specified timeout or when aborted.
+ * @param ms - The number of milliseconds to wait before resolving/rejecting the promise.
+ * @param options - An optional configuration object to control the behavior of the timeout (resolve or reject) and aborting logic.
+ * @returns A `PromiseWithDisposal` that resolves or rejects after the specified timeout or when aborted.
  *
- * @example
+ * @example Reject on timeout (default)
  * ```typescript
  * const timeoutPromise = timeout(5000);
  *
@@ -454,10 +474,25 @@ export function abortable(
  * timeoutPromise[Symbol.dispose]();
  * ```
  *
+ * @example Resolve on timeout
+ * ```typescript
+ * const timeoutPromise = timeout(5000, { resolveOnTimeout: true });
+ *
+ * try {
+ *   await timeoutPromise;
+ *   console.log("Operation resolved after timeout");
+ * } catch (error) {
+ *   console.error("Unexpected error:", error);
+ * }
+ *
+ * // Clean up resources
+ * timeoutPromise[Symbol.dispose]();
+ * ```
+ *
  * @example Using with AbortSignal
  * ```typescript
  * const controller = new AbortController();
- * const timeoutPromise = timeout(5000, controller.signal);
+ * const timeoutPromise = timeout(5000, { abort: controller.signal });
  *
  * // Abort the operation before the timeout
  * setTimeout(() => controller.abort(), 1000);
@@ -476,23 +511,28 @@ export function abortable(
  */
 export function timeout(
   ms: number,
-  abort?: AbortController | AbortSignal,
+  options: TimeoutOptions = {}
 ): PromiseWithDisposal<void> {
-  // Create a promise with external resolve and reject capabilities
-  const { promise, reject } = Promise.withResolvers<void>();
+  const { reject: rejectOnTimout = true, abort } = options;
 
-  // Set a timeout to reject the promise after the specified time
-  const timeoutId = setTimeout(reject, ms);
+  // Create a promise with external resolve and reject capabilities
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+
+  // Set a timeout to resolve or reject the promise after the specified time
+  const timeoutId = setTimeout(() => {
+    if (rejectOnTimout) {
+      reject(new Error('Timeout exceeded'));
+    } else {
+      resolve();
+    }
+  }, ms);
 
   // Create an abortable promise if an abort signal is provided
   const abortPromise = abort ? abortable(abort) : null;
 
   // Return a race between the timeout and the abortable promise (if provided)
   return Object.assign(
-    Promise.race([
-      promise,
-      abortPromise,
-    ]),
+    abortPromise ? Promise.race([promise, abortPromise]) : promise,
     {
       [Symbol.dispose]() {
         // Clear the timeout to prevent memory leaks

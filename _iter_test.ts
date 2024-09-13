@@ -1,4 +1,4 @@
-import { splitIter, splitIterBy } from "./iter.ts";
+import { splitIter, splitIterBy } from "./_iter.ts";
 
 import { test } from "@libs/testing";
 import { expect } from "@std/expect";
