@@ -1,10 +1,5 @@
-import type {
-  Channel,
-  BidirectionalChannel,
-  EnhancedReadableStream,
-} from "./types.ts";
-
-import { ReadableStreamSet, enhanceReadableStream } from "./disposal.ts";
+import type { EnhancedReadableStream } from "./_enhanced_readable_stream.ts";
+import { enhanceReadableStream } from "./_enhanced_readable_stream.ts";
 import { streamTee } from "./_stream.ts";
 
 /**
@@ -143,7 +138,6 @@ export function createChannel<T>(): Channel<T> {
   const readableStream = transformStream.readable;
 
   const enhancedReadableStream = enhanceReadableStream(readableStream);
-  let currentReadableStream = enhancedReadableStream;
 
   return {
     /**
@@ -152,29 +146,19 @@ export function createChannel<T>(): Channel<T> {
     writable: transformStream.writable,
 
     /**
-     * Method to get the shared writer for direct writing.
-     * @returns WritableStreamDefaultWriter<T>
-     */
-    getWriter(): WritableStreamDefaultWriter<T> {
-      return sharedWriter;
-    },
-
-    /**
      * Getter for the readable stream, which supports multiple readers via tee.
      * Each time it's accessed, it provides a new reader wrapped with disposal support.
      *
      * @returns A new readable stream with disposal support.
      */
-    get readable(): EnhancedReadableStream<T> {
-      const [branch1, branch2] = streamTee(currentReadableStream as ReadableStream<T>);
+    readable: enhancedReadableStream,
 
-      const wrappedBranch1 = enhanceReadableStream(branch1);
-      ReadableStreamSet.add(wrappedBranch1);
-      currentReadableStream = wrappedBranch1; // Keep one branch for further teeing
-
-      const wrappedBranch2 = enhanceReadableStream(branch2);
-      ReadableStreamSet.add(wrappedBranch2);
-      return wrappedBranch1;
+    /**
+     * Method to get the shared writer for direct writing.
+     * @returns WritableStreamDefaultWriter<T>
+     */
+    getWriter(): WritableStreamDefaultWriter<T> {
+      return sharedWriter;
     },
 
     /**
@@ -424,4 +408,102 @@ export function createBidirectionalChannel<
       await channelBtoA[Symbol.asyncDispose]();
     },
   };
+}
+
+
+
+/**
+ * This module provides utility functions for creating both unidirectional and bidirectional communication channels built on top of Web Streams.
+ * The channels enable data flow between one or more producers (writers) and multiple consumers (readers), with support for full-duplex communication in the bidirectional case.
+ *
+ * The unidirectional `createChannel` function allows multiple independent readers to access the same stream of data written by one or more producers.
+ * The bidirectional `createBidirectionalChannel` function enables two endpoints to communicate in a full-duplex manner, each with its own readable and writable streams.
+ *
+ * Both types of channels support proper resource disposal via `Symbol.dispose`, and the writable streams are accessible for piping or direct writing, while the readable streams allow for multiple independent consumers.
+ *
+ * The Web Streams API serves as the foundation for these channels, offering efficient handling of continuous or large data flows with built-in backpressure management. This makes them ideal for scenarios such as real-time communication, file processing, or network data streaming.
+ *
+ * @see {@link https://developer.mozilla.org/en-US/docs/Web/API/Streams_API Streams API Documentation} for more details on Web Streams.
+ *
+ * @module
+ */
+
+/**
+ * Interface representing a unidirectional communication channel.
+ *
+ * @template T - The type of data transmitted through the channel.
+ */
+export interface Channel<T> {
+  /**
+   * The writable stream that can be used for piping or writing directly.
+   */
+  readonly writable: WritableStream<T>;
+
+  /**
+   * Method to get the shared writer for direct writing.
+   * @returns WritableStreamDefaultWriter<T>
+   */
+  getWriter(): WritableStreamDefaultWriter<T>;
+
+  /**
+   * Getter for the readable stream, which supports multiple readers via tee.
+   * Each time it's accessed, it provides a new reader wrapped with disposal support.
+   *
+   * @returns A new readable stream with disposal support.
+   */
+  readonly readable: EnhancedReadableStream<T>;
+
+  /**
+   * Closes the channel by closing the shared writer and canceling all branches of the readable stream.
+   */
+  close(): void;
+
+  /**
+   * Disposes of the channel resources using the Symbol.dispose protocol.
+   */
+  [Symbol.dispose](): void;
+
+  /**
+   * Asynchronously disposes of the channel resources using the Symbol.asyncDispose protocol.
+   * This ensures that all readers are properly canceled and cleaned up asynchronously.
+   * @returns A promise that resolves when the disposal is complete.
+   */
+  [Symbol.asyncDispose](): Promise<void>;
+}
+
+/**
+ * Interface representing a bidirectional communication channel.
+ *
+ * @template TRequest - The type of data sent from endpoint A to B.
+ * @template TResponse - The type of data sent from endpoint B to A.
+ */
+export interface BidirectionalChannel<TRequest, TResponse> {
+  /**
+   * Endpoint A can write requests and read responses.
+   */
+  readonly endpointA: {
+    readonly writer: WritableStreamDefaultWriter<TRequest>;
+    readonly readable: EnhancedReadableStream<TResponse>;
+  };
+
+  /**
+   * Endpoint B can write responses and read requests.
+   */
+  readonly endpointB: {
+    readonly writer: WritableStreamDefaultWriter<TResponse>;
+    readonly readable: EnhancedReadableStream<TRequest>;
+  };
+
+  /**
+   * Disposes of the bidirectional channel resources using the Symbol.dispose protocol.
+   * This ensures that all streams are closed and resources are released.
+   */
+  [Symbol.dispose](): void;
+
+  /**
+   * Asynchronously disposes of the bidirectional channel resources using the Symbol.asyncDispose protocol.
+   * This ensures that all streams are closed and resources are released asynchronously.
+   * @returns A promise that resolves when the disposal is complete.
+   */
+  [Symbol.asyncDispose](): Promise<void>;
 }
