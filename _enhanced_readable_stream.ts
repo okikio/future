@@ -1,25 +1,27 @@
+import type { DualDisposable } from "./types.ts";
+/**
+ * Metadata interface for tracking streams and their relationships.
+ */
+export interface StreamMetadata<T> {
+  id?: string;                       // Optional identifier for debugging.
+  available: Promise<boolean>;       // Promise that resolves when the stream is available.
+  parent: ReadableStream<T> | null;  // Parent stream, if any.
+  children: Set<ReadableStream<T>>;  // Set of child streams.
+}
+
 /**
  * Global constants for original ReadableStream methods.
  */
-const originalReadableStreamGetReader = ReadableStream.prototype.getReader;
-const originalReadableStreamCancel = ReadableStream.prototype.cancel;
 const originalReadableStreamTee = ReadableStream.prototype.tee;
+const originalReadableStreamCancel = ReadableStream.prototype.cancel;
+const originalReadableStreamGetReader = ReadableStream.prototype.getReader;
 
-/**
- * Global constants for original ReadableStreamDefaultReader methods.
- */
-const originalReadableStreamDefaultReaderReleaseLock =
-  ReadableStreamDefaultReader.prototype.releaseLock;
-const originalReadableStreamDefaultReaderCancel =
-  ReadableStreamDefaultReader.prototype.cancel;
-
-/**
- * Global constants for original ReadableStreamBYOBReader methods.
- */
-const originalReadableStreamBYOBReaderReleaseLock =
-  ReadableStreamBYOBReader.prototype.releaseLock;
-const originalReadableStreamBYOBReaderCancel =
-  ReadableStreamBYOBReader.prototype.cancel;
+// Registry to keep track of streams and their metadata.
+export const ReadableStreamRegistry = new WeakMap<ReadableStream<unknown>, StreamMetadata<unknown>>();
+// Map to track the current inactive streams associated with each source stream.
+export const AvailableReadableStream = new WeakMap<ReadableStream<unknown>, ReadableStream<unknown>>();
+// Map to keep count of streams created from each source stream.
+export const ReadableStreamCounter = new WeakMap<ReadableStream<unknown>, number>();
 
 /**
  * A WeakMap that stores the `ReadableStreamReader` for a given `ReadableStream`.
@@ -27,60 +29,33 @@ const originalReadableStreamBYOBReaderCancel =
  * This map is used to track readers associated with specific streams, ensuring that each
  * stream's reader can be managed and disposed of properly.
  */
-export const ReadableStreamReaderMap: WeakMap<
+// Weak
+export const ReadableStreamReader = new WeakMap<
   ReadableStream<unknown>,
-  WeakRef<ReadableStreamReaderWithDisposal<ReadableStreamReader<unknown>>>
-  > = new WeakMap();
-
-/**
- * WeakMap to track the parent of each stream branch.
- * The key is the child (branch) and the value is the parent stream.
- */
-export const ReadableStreamParentMap: WeakMap<
-  ReadableStream<unknown>,
-  ReadableStream<unknown>
-> = new WeakMap();
-
-/**
- * WeakMap to track all branches for a given parent stream.
- * The key is the parent stream, and the value is a Set of child branches.
- */
-export const ReadableStreamBranchesMap: WeakMap<
-  ReadableStream<unknown>,
-  Set<ReadableStream<unknown>>
-> = new WeakMap();
-
-/**
- * A WeakMap that stores the `ReadableStreamReader` for a given `ReadableStream`.
- *
- * This map is used to track readers associated with specific streams, ensuring that each
- * stream's reader can be managed and disposed of properly.
- */
-export const ReadableStreamAvailableBranch: WeakMap<
-  ReadableStream<unknown>,
-  WeakRef<ReadableStream<unknown>>
-> = new WeakMap();
-
-/**
- * A Set that stores `ReadableStream` objects.
- *
- * This set is used to track streams that are currently active, allowing for management of
- * their lifecycle and ensuring that resources are cleaned up appropriately when streams are
- * disposed of.
- */
-export const ReadableStreamSet: Set<ReadableStream<unknown>> = new Set();
+  Map<ReadableStream<unknown>, ReadableStreamReaderWithDisposal<ReadableStreamReader<unknown>>>
+>();
 
 /**
  * Interface representing an enhanced `ReadableStream` with disposal capabilities.
  */
 export interface ReadableStreamWithDisposal<T> extends ReadableStream<T>, AsyncDisposable { }
-export type EnhancedReadableStream<T> = Omit<ReadableStreamWithDisposal<T>, "getReader" | "tee"> & {
-  getReader(options: { mode: "byob" }): ReadableStreamReaderWithDisposal<ReadableStreamBYOBReader>;
+
+/**
+ * Enhanced ReadableStream type with overloaded `getReader` method
+ */
+export type EnhancedReadableStream<T = unknown> = Omit<ReadableStreamWithDisposal<T>, "getReader"> & {
+  // Overload for default reader
   getReader(): ReadableStreamReaderWithDisposal<ReadableStreamDefaultReader<T>, T>;
-  getReader(options?: ReadableStreamGetReaderOptions): ReadableStreamReaderWithDisposal<ReadableStreamReader<T>, T>;
-  getReader(...args: Parameters<ReadableStream<T>["getReader"]>): ReadableStreamReaderWithDisposal<ReadableStreamReader<T>, T>;
-  tee(...args: Parameters<ReadableStream<T>["tee"]>): ReturnType<typeof enhancedTee<T>>;
-}
+
+  // Overload for BYOB mode
+  // getReader(options: { mode: "byob" }): ReadableStreamReaderWithDisposal<ReadableStreamBYOBReader, T>;
+
+  // Overload for general ReadableStreamGetReaderOptions
+  // getReader(options?: ReadableStreamGetReaderOptions): ReadableStreamReaderWithDisposal<ReadableStreamReader<T>, T>;
+
+  // Fallback using Parameters of the original getReader method
+  getReader(...args: Parameters<ReadableStream<T>["getReader"]> | []): ReadableStreamReaderWithDisposal<ReadableStreamReader<T>, T>;
+};
 
 /**
  * Interface representing an enhanced `ReadableStreamReader` with disposal capabilities.
@@ -88,9 +63,9 @@ export type EnhancedReadableStream<T> = Omit<ReadableStreamWithDisposal<T>, "get
 export type ReadableStreamReaderWithDisposal<
   R extends ReadableStreamReader<T>,
   T = unknown
-> = R & AsyncDisposable & {
-  stream: ReadableStream<T>;
-}
+> = R & DualDisposable & {
+  stream: ReadableStream<T>
+};
 
 /**
  * Enhances the `ReadableStream` by adding disposal capabilities.
@@ -99,360 +74,380 @@ export type ReadableStreamReaderWithDisposal<
  * @param stream - The `ReadableStream` to wrap and enhance with disposal support.
  * @returns A new `ReadableStream` that includes methods for synchronous and asynchronous disposal.
  */
-export function enhanceReadableStream<T = unknown>(
+export function enhanceReadableStream<T>(
   stream: ReadableStream<T>,
 ): EnhancedReadableStream<T> {
   const enhancedStream = Object.assign(stream, {
-    getReader(
+    /**
+     * Overrides the default `getReader` method to track and manage the reader.
+     * Ensures that the reader is properly associated with the stream and can be disposed of.
+     *
+     * @template R - The type of the reader.
+     * @param this - The enhanced `ReadableStream` instance.
+     * @param args - Arguments passed to the original `getReader` method.
+     * @returns The `ReadableStreamReader` associated with the stream.
+     */
+    getReader<R extends ReadableStreamReader<T>>(
       this: ReadableStream<T>,
       ...args: Parameters<ReadableStream<T>["getReader"]> | []
-    ) { return enhancedGetReader<T>(this, ...args) },
-    cancel(
-      this: ReadableStream<T>,
-      ...args: Parameters<ReadableStream<T>["cancel"]>
-    ) { return enhancedCancel<T>(this, ...args) },
-    tee(
-      this: ReadableStream<T>,
-      ...args: Parameters<ReadableStream<T>["tee"]>
-    ) { return enhancedTee<T>(this, ...args) },
-    [Symbol.asyncIterator](
-      this: ReadableStream<T>
-    ) { return enhancedAsyncIterator<T>(this) },
-    [Symbol.asyncDispose](
-      this: ReadableStream<T>
-    ) { return enhancedAsyncDispose<T>(this) },
+    ) { 
+      const stream = createReadable(this);
+      const rawReader = stream.getReader(...args);
+      const reader = Object.assign(rawReader as ReadableStreamReaderWithDisposal<R, T>, {
+        stream,
+        [Symbol.dispose]() {
+          return rawReader.releaseLock();
+        },
+        [Symbol.asyncDispose]() {
+          return Promise.resolve(rawReader.releaseLock());
+        }
+      });
+
+      // Track the reader in the ReadableStreamReader to manage disposal
+      if (!ReadableStreamReader.has(this)) {
+        ReadableStreamReader.set(this, new Map());
+      }
+
+      // Return the enhanced reader
+      ReadableStreamReader.get(this)?.set(stream, reader);
+      return reader;
+    },
+
+    /**
+     * Overrides the default `getReader` method to track and manage the reader.
+     * Ensures that the reader is properly associated with the stream and can be disposed of.
+     *
+     * @param this - The `ReadableStream` instance for which the reader is being requested.
+     * @param args - Arguments passed to the original `getReader` method.
+     * @returns The `ReadableStreamReader` associated with the stream.
+     */
+    async cancel(this: ReadableStream<T>, ...args: Parameters<ReadableStream<T>["cancel"]>) {
+      const readers = ReadableStreamReader.get(this);
+      Array.from(
+        readers?.values() ?? [],
+        reader => reader?.releaseLock()
+      );
+      await cancelAll(this, ...args);
+      readers?.clear();
+      ReadableStreamReader.delete(this);
+    },
+
+    /**
+     * Provides an async iterator over the `ReadableStream`.
+     *
+     * Note: This method only works with the default reader, not the BYOB reader.
+     *
+     * @param this - The enhanced `ReadableStream` instance.
+     */
+    async *[Symbol.asyncIterator](this: ReadableStream<T>) {
+      const reader = this.getReader();
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          yield value;
+        }
+      } finally {
+        reader.releaseLock(); // Release the lock when done
+      }
+    },
+    
+    /**
+     * Asynchronous disposal of the `ReadableStream`.
+     *
+     * This method cancels the stream and releases resources asynchronously. If the stream is
+     * locked, the lock is explicitly released before the stream is canceled.
+     *
+     * @param this - The enhanced `ReadableStream` instance.
+     * @returns A promise that resolves when the disposal is complete.
+     */
+    [Symbol.asyncDispose](this: ReadableStream<T>) {    
+      return this.cancel();
+    },
   });
+
   return enhancedStream as EnhancedReadableStream<T>;
 }
 
 /**
- * Overrides the default `getReader` method to track and manage the reader.
- * Ensures that the reader is properly associated with the stream and can be disposed of.
+ * Custom `tee` function that splits a `ReadableStream` into two branches with additional control and tracking.
  *
- * @template T - The type of data in the `ReadableStream`.
- * @param this - The enhanced `ReadableStream` instance.
- * @param args - Arguments passed to the original `getReader` method.
- * @returns The `ReadableStreamReader` associated with the stream.
+ * This function acts similarly to the native `ReadableStream.tee()` method but provides enhanced functionality
+ * such as tracking availability and supporting asynchronous disposal.
+ *
+ * @typeParam T - The type of data chunks emitted by the stream.
+ * @param stream - The original `ReadableStream` to split.
+ * @returns A tuple containing two new `ReadableStreams`, a `Promise` that resolves when the streams are available,
+ *          and implements `AsyncDisposable` for proper cleanup.
+ *
+ * @example
+ * ```ts
+ * const [branch1, branch2, available] = enhancedTee(originalStream);
+ * // Use branch1 and branch2 independently
+ * ```
+ *
+ * @remarks
+ * This function is designed to work with streams that need enhanced control over cancellation and resource management.
+ * It ensures that both branches are properly handled in case of errors or cancellations.
  */
-export function enhancedGetReader<T>(
+export function enhancedTee<T = unknown>(
   stream: ReadableStream<T>,
-  ...args: Parameters<ReadableStream<T>["getReader"]> | []
-): ReadableStreamReaderWithDisposal<ReadableStreamReader<T>, T> {
-  // If the stream has been branched before, retrieve the available branch
-  const currentStream = ReadableStreamAvailableBranch.get(stream)?.deref?.() ?? stream;
-
-  // Create two new branches of the stream
-  const [inactive, active] = originalReadableStreamTee.call(currentStream);
-
-  // If the stream is already tracked, update the available branch map with one of the branches
-  ReadableStreamAvailableBranch.set(stream, new WeakRef(inactive));
-
-  // Add both new branches to the ReadableStreamSet for lifecycle tracking
-  ReadableStreamSet.add(inactive);
-  ReadableStreamSet.add(active);
-
-  // Track all branches for the parent stream in ReadableStreamBranchesMap
-  trackBranches(stream, active);
-  trackBranches(stream, inactive);
-
-  // Create a new reader from the second branch using the original getReader method
-  const rawReader = originalReadableStreamGetReader.apply(active, args);
-  
-  // Enhance the reader with disposal logic to ensure proper cleanup
-  const reader = enhanceReaderWithDisposal(active as ReadableStream<T>, rawReader);
-
-  // Track the reader in the ReadableStreamReaderMap to manage disposal
-  ReadableStreamReaderMap.set(currentStream, new WeakRef(reader));
-
-  // Return the enhanced reader
-  return reader as ReadableStreamReaderWithDisposal<ReadableStreamReader<T>, T>;
-}
-
-/**
- * Tracks the branches created for a given parent stream.
- * This allows us to cancel the streams in the correct order, starting from the most recent branches.
- *
- * @param parent - The parent `ReadableStream`.
- * @param branch - The new `ReadableStream` branch created.
- */
-function trackBranches(
-  parent: ReadableStream<unknown>,
-  branch: ReadableStream<unknown>
-) {
-  // Get the set of branches for the parent, or create a new set
-  const branches = ReadableStreamBranchesMap.get(parent) ?? new Set<ReadableStream<unknown>>();
-  
-  // Add the new branch to the set
-  branches.add(branch);
-
-  // Update the branches map with the new set
-  ReadableStreamBranchesMap.set(parent, branches);
-}
-
-/**
- * Provides an async iterator over the `ReadableStream`.
- *
- * Note: This method only works with the default reader, not the BYOB reader.
- *
- * @template T - The type of data in the `ReadableStream`.
- * @param this - The enhanced `ReadableStream` instance.
- */
-export async function* enhancedAsyncIterator<T>(
-  stream: ReadableStream<T>
-): AsyncGenerator<T, void, unknown> {
-  const _reader = enhancedGetReader(stream);
-
-  if (isBYOBReader(_reader)) {
-    throw new Error(
-      "Cannot use async iterator with a BYOB reader. Use the default reader instead.",
-    );
-  }
-
-  const reader = _reader as ReadableStreamDefaultReader<T>;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      yield value;
-    }
-  } finally {
-    reader.releaseLock(); // Release the lock when done
-  }
-}
-
-/**
- * Overrides the default `getReader` method to track and manage the reader.
- * Ensures that the reader is properly associated with the stream and can be disposed of.
- *
- * @template T - The type of data in the `ReadableStream`.
- * @param stream - The `ReadableStream` instance for which the reader is being requested.
- * @param args - Arguments passed to the original `getReader` method.
- * @returns The `ReadableStreamReader` associated with the stream.
- */
-export async function enhancedCancel<T>(
-  stream: ReadableStream<T>,
-  ...args: Parameters<ReadableStream<T>["cancel"]>
-): Promise<void> {
-  // Stack to hold streams that need to be processed (cancelled)
-  const stack: ReadableStream<unknown>[] = [stream];
-
-  // Set to keep track of streams that have been processed to avoid reprocessing
-  const cancelledStreams = new Set<ReadableStream<unknown>>();
-
-  // Result of the original cancel method
-  let result: Awaited<ReturnType<typeof originalReadableStreamCancel>>;
-
-  console.log({
-    stack,
-    cancelledStreams,
-  })
-
-  // Process the stack
-  while (stack.length > 0) {
-    const currentStream = stack.pop()!; // Get the current stream to be cancelled
-
-    if (cancelledStreams.has(currentStream)) {
-      continue; // If the stream has already been cancelled, skip it
-    }
-
-    // Mark the stream as cancelled
-    cancelledStreams.add(currentStream);
-
-    // Cancel the current stream
-    result = await originalReadableStreamCancel.apply(currentStream, args);
-
-    // Get the branches of the current stream (if any)
-    const branches = ReadableStreamBranchesMap.get(currentStream);
-    if (branches) {
-      // Add branches to the stack for cancellation (latest branches first)
-      Array.from(branches).reverse().forEach(branch => stack.push(branch));
-    }
-
-    // Get the parent of the current stream (if any)
-    const parentStream = ReadableStreamParentMap.get(currentStream);
-    if (parentStream) {
-      stack.push(parentStream); // Add the parent to the stack for cancellation
-    }
-
-    // Clean up the maps and sets related to the current stream
-    ReadableStreamSet.delete(currentStream);
-    ReadableStreamReaderMap.delete(currentStream);
-    ReadableStreamAvailableBranch.delete(currentStream);
-    ReadableStreamParentMap.delete(currentStream);
-    ReadableStreamBranchesMap.delete(currentStream);
-  }
-
-  return result;
-}
-
-/**
- * Asynchronous disposal of the `ReadableStream`.
- *
- * This method cancels the stream and releases resources asynchronously. If the stream is
- * locked, the lock is explicitly released before the stream is canceled.
- *
- * @template T - The type of data in the `ReadableStream`.
- * @param this - The enhanced `ReadableStream` instance.
- * @param reason - The reason for disposing of the stream.
- * @returns A promise that resolves when the disposal is complete.
- */
-export async function enhancedAsyncDispose<T>(
-  stream: ReadableStream<T>,
-  reason?: unknown,
-): Promise<void> {
-  if (stream.locked) {
-    const reader = enhancedGetReader(stream);
-    enhancedReaderAsyncDispose(reader);
-  }
-
-  return await enhancedCancel(stream, reason);
-}
-
-/**
- * Enhances a `ReadableStreamReader` by adding disposal capabilities.
- *
- * @template R - The type of the reader.
- * @param stream - The `ReadableStream` associated with the reader.
- * @param reader - The reader to enhance with disposal capabilities.
- * @returns The enhanced reader with disposal methods.
- */
-export function enhanceReaderWithDisposal<R extends ReadableStreamReader<T>, T = unknown>(
-  stream: ReadableStream<T>,
-  reader: R,
-): ReadableStreamReaderWithDisposal<R, T> {
-  const enhancedReader = Object.assign(reader, {
-    stream,
-    cancel(
-      this: ReadableStreamReaderWithDisposal<R, T>,
-      ...args: Parameters<R["cancel"]>
-    ) { return enhancedReaderCancel(this, ...args) },
-    releaseLock(
-      this: ReadableStreamReaderWithDisposal<R, T>,
-      ...args: Parameters<R["releaseLock"]>
-    ) { return enhancedReaderReleaseLock(this, ...args) },
-    [Symbol.asyncDispose](
-      this: ReadableStreamReaderWithDisposal<R, T>,
-    ) { return enhancedReaderAsyncDispose(this) },
-  });
-  return enhancedReader;
-}
-
-/**
- * Overrides the `releaseLock` method to ensure proper cleanup.
- *
- * @template R - The type of the reader.
- * @param this - The enhanced reader instance.
- * @param args - Arguments passed to the original `releaseLock` method.
- */
-export function enhancedReaderReleaseLock<R extends ReadableStreamReader<T>, T = unknown>(
-  reader: ReadableStreamReaderWithDisposal<R, T> | ReadableStreamReader<T>,
-  ...args: Parameters<R["releaseLock"]> | []
-) {
-  const originalReleaseLock = isBYOBReader(reader)
-    ? originalReadableStreamBYOBReaderReleaseLock
-    : originalReadableStreamDefaultReaderReleaseLock;
-
-  const result = originalReleaseLock.apply(reader, args);
-  if ("stream" in reader) {
-    ReadableStreamReaderMap.delete(reader.stream);
-    reader.stream = null as unknown as ReadableStream<T>;
-  }
-  return result;
-}
-
-/**
- * Overrides the `cancel` method to ensure proper cleanup.
- *
- * @template R - The type of the reader.
- * @param this - The enhanced reader instance.
- * @param args - Arguments passed to the original `cancel` method.
- * @returns A promise that resolves when the reader has been canceled.
- */
-export async function enhancedReaderCancel<
-  R extends ReadableStreamReader<T>,
-  T = unknown
->(
-  reader: ReadableStreamReaderWithDisposal<R, T> | ReadableStreamReader<T>,
-  ...args: Parameters<R["cancel"]> | []
-) {
-  const originalCancel = isBYOBReader(reader)
-    ? originalReadableStreamBYOBReaderCancel
-    : originalReadableStreamDefaultReaderCancel;
-
-  const result = await originalCancel.apply(reader, args);
-  if ("stream" in reader) {
-    ReadableStreamReaderMap.delete(reader.stream);
-    reader.stream = null as unknown as ReadableStream<T>;
-  }
-  return result;
-}
-
-/**
- * Asynchronous disposal of the `ReadableStreamReader`.
- *
- * This method cancels the reader and releases the lock asynchronously.
- *
- * @template R - The type of the reader.
- * @param this - The enhanced reader instance.
- * @param args - Arguments passed to the original `cancel` method.
- * @returns A promise that resolves when the disposal is complete.
- */
-export async function enhancedReaderAsyncDispose<
-  R extends ReadableStreamReader<T>,
-  T = unknown
->(
-  reader: ReadableStreamReaderWithDisposal<R, T> | ReadableStreamReader<T>,
-) {
-  await enhancedReaderCancel(reader);
-  enhancedReaderReleaseLock(reader);
-}
-
-/**
- * Custom tee function that works with enhanced streams.
- * Splits the stream into two branches, each of which is an enhanced stream.
- */
-export function enhancedTee<T>(
-  stream: ReadableStream<T>, 
   ..._args: Parameters<ReadableStream<T>["tee"]> | []
-): [EnhancedReadableStream<T>, EnhancedReadableStream<T>] {
-  // Create two TransformStreams to act as branches
+): [ReadableStream<T>, ReadableStream<T>, Promise<boolean>] & AsyncDisposable {
+  // Create two TransformStreams to act as branches.
+  // TransformStream allows us to write to its writable end and read from its readable end.
   const branch1 = new TransformStream<T>();
   const branch2 = new TransformStream<T>();
 
-  // Start reading from the original stream and write to both branches
+  // Create a promise that will be resolved when the branches are fully set up.
+  const { promise: available, resolve } = Promise.withResolvers<boolean>();
+
+  // Start an async function to read from the original stream and write to both branches.
   (async () => {
-    const reader = stream.getReader();
+    // Get a reader from the original stream to read data chunks.
+    const reader = originalReadableStreamGetReader.apply(stream) as ReadableStreamDefaultReader<T>;
+    // Get writers for both branches to write data into them.
     const writer1 = branch1.writable.getWriter();
     const writer2 = branch2.writable.getWriter();
 
     try {
       while (true) {
+        // Read a chunk from the original stream.
         const { done, value } = await reader.read();
         if (done) {
-          await writer1.close();
-          await writer2.close();
+          // If the original stream is done, close both writers.
+          // Use Promise.any to proceed as soon as one writer is closed successfully.
+          await Promise.any([
+            writer1.close(),
+            writer2.close()
+          ]);
           break;
         }
-        await Promise.all([
+
+        // Write the chunk to both branches.
+        // Use Promise.any to proceed as soon as one write is successful.
+        // This prevents the read loop from being blocked if one of the branches is slow.
+        await Promise.any([
           writer1.write(value),
-          writer2.write(value),
+          writer2.write(value)
         ]);
       }
     } catch (error) {
-      await writer1.abort(error);
-      await writer2.abort(error);
+      // If an error occurs, abort both writers.
+      // Use Promise.all to ensure both writers are aborted.
+      await Promise.all([
+        writer1.abort(error),
+        writer2.abort(error)
+      ]);
     } finally {
+      // Release the locks on the reader and writers.
       reader.releaseLock();
       writer1.releaseLock();
       writer2.releaseLock();
+      // Resolve the available promise to signal that the branches are available.
+      resolve(true);
     }
   })();
 
-  // Enhance the branches
-  const enhancedBranch1 = enhanceReadableStream(branch1.readable);
-  const enhancedBranch2 = enhanceReadableStream(branch2.readable);
+  // Get the readable ends of the TransformStreams to return as the branches.
+  const stream1 = branch1.readable;
+  const stream2 = branch2.readable;
 
-  return [enhancedBranch1, enhancedBranch2];
+  // Prepare the result tuple with the two branches and the availability promise.
+  const result: [
+    ReadableStream<T>,
+    ReadableStream<T>,
+    Promise<boolean>
+  ] = [stream1, stream2, available];
+
+  // Implement AsyncDisposable to allow for proper cleanup.
+  return Object.assign(result, {
+    async [Symbol.asyncDispose]() {
+      const err = new Error("Cancelled");
+      // Cancel both branches and wait for them to be available.
+      await Promise.all([
+        stream1.cancel(err),
+        stream2.cancel(err),
+        available
+      ]);
+    }
+  });
+}
+
+/**
+ * Creates a new `ReadableStream<T>` from a source stream, allowing dynamic branching.
+ *
+ * This function maintains a registry of streams and their relationships, enabling the creation of multiple
+ * readable streams from a single source stream. It uses an enhanced tee function to split the current inactive
+ * stream into active and inactive branches.
+ *
+ * @typeParam T - The type of data chunks emitted by the stream.
+ * @param sourceStream - The original `ReadableStream` to create a new readable from.
+ * @returns A new `ReadableStream<T>` that reads data from the source stream.
+ *
+ * @example
+ * ```ts
+ * const sourceStream = createInfiniteStream();
+ * const streamA = createReadable(sourceStream);
+ * const streamB = createReadable(sourceStream);
+ * // Now streamA and streamB are independent readers of the sourceStream.
+ * ```
+ *
+ * @remarks
+ * This function keeps track of the current inactive stream associated with the source stream.
+ * Each time `createReadable` is called, it splits the current inactive stream into active and inactive branches.
+ * The active branch is returned, and the inactive branch becomes the new current inactive stream.
+ * This allows for dynamic creation of new readables from the source stream at any time.
+ */
+export function createReadable<T = unknown>(sourceStream: ReadableStream<T>): ReadableStream<T> {
+  // Initialize the count for the sourceStream if not already set
+  if (!ReadableStreamCounter.has(sourceStream)) ReadableStreamCounter.set(sourceStream, 0);
+
+  // Get the current inactive stream associated with the sourceStream, or default to the sourceStream
+  const currentInactiveStream = AvailableReadableStream.get(sourceStream) as ReadableStream<T> || sourceStream;
+
+  // Use enhancedTee to split the currentInactiveStream into active and inactive branches
+  const [active, inactive, available] = enhancedTee<T>(currentInactiveStream);
+
+  // Retrieve the metadata for the currentInactiveStream from the registry
+  let sourceNode = ReadableStreamRegistry.get(currentInactiveStream);
+
+  // If the sourceNode doesn't exist, initialize it
+  if (!sourceNode) {
+    const count = ReadableStreamCounter.get(sourceStream)!;
+    // Set metadata for the currentInactiveStream in the registry
+    ReadableStreamRegistry.set(currentInactiveStream, (sourceNode = {
+      id: `${count}-source`,
+      available,
+      parent: null,
+      children: new Set([active, inactive]),
+    }));
+
+    // Optionally mark the sourceStream for debugging purposes
+    Object.assign(sourceStream, { source: true });
+    // Increment the count for the sourceStream
+    ReadableStreamCounter.set(sourceStream, count + 1);
+  } else {
+    // If the sourceNode exists, update its available promise and add the new branches to its children
+    sourceNode.available = available;
+    sourceNode.children.add(active);
+    sourceNode.children.add(inactive);
+  }
+
+  // Get the updated count for naming purposes
+  const count = ReadableStreamCounter.get(sourceStream)!;
+
+  // Create metadata for the active branch (the new readable to return)
+  ReadableStreamRegistry.set(active, {
+    id: `${count}-active`,
+    available,
+    parent: currentInactiveStream,
+    children: new Set(),
+  });
+  // Optionally assign an id to the active stream for debugging
+  Object.assign(active, { id: `${count}-active` });
+
+  // Create metadata for the inactive branch (the new current inactive stream)
+  ReadableStreamRegistry.set(inactive, {
+    id: `${count}-inactive`,
+    available,
+    parent: currentInactiveStream,
+    children: new Set(),
+  });
+  // Optionally assign an id to the inactive stream for debugging
+  Object.assign(inactive, { id: `${count}-inactive` });
+
+  // Update the currentStreams map with inactive as the new current inactive stream
+  AvailableReadableStream.set(sourceStream, inactive);
+  // Increment the count for the sourceStream
+  ReadableStreamCounter.set(sourceStream, count + 1);
+
+  // Return the active branch as the new readable stream
+  return active;
+}
+
+/**
+ * Cancels all streams starting from the given `sourceStream`, recursively canceling all its children.
+ *
+ * This function traverses the stream tree starting from the `sourceStream` and cancels each stream,
+ * ensuring that resources are properly cleaned up.
+ *
+ * @typeParam T - The type of data chunks emitted by the streams.
+ * @param sourceStream - The original `ReadableStream` from which to start cancellation.
+ * @returns A `Promise` that resolves when all streams have been canceled.
+ *
+ * @example
+ * await cancelAll(sourceStream);
+ *
+ * @remarks
+ * This function uses a stack to perform a depth-first traversal of the stream tree.
+ * It keeps track of visited streams to prevent processing the same stream multiple times.
+ * After canceling each stream, it updates the registry and currentStreams maps accordingly.
+ */
+export async function cancelAll<T>(sourceStream: ReadableStream<T>, ...args: Parameters<ReadableStream<T>["cancel"]>): Promise<void> {
+  // Initialize the stack with the sourceStream
+  const stack = [[sourceStream]];
+  // Initialize a set to keep track of visited streams
+  const visited = new WeakSet<ReadableStream<T>>();
+
+  // Perform a depth-first traversal of the stream tree
+  for (let i = 0; i < stack.length; i++) {
+    const queue = stack[i];
+    const len = queue.length;
+
+    for (let j = 0; j < len; j++) {
+      const stream = queue[j];
+
+      if (!visited.has(stream)) {
+        // Get the metadata for the stream
+        const node = ReadableStreamRegistry.get(stream);
+        if (node?.children?.size) {
+          // If the stream has children, add them to the stack for later processing
+          stack.push(Array.from(node.children) as ReadableStream<T>[]);
+        }
+
+        // Mark the stream as visited
+        visited.add(stream);
+      }
+    }
+  }
+
+  // Cancel streams in reverse order to ensure proper cleanup
+  while (stack.length > 0) {
+    // Get the streams at the current level
+    const streams = stack.pop();
+
+    // Cancel each stream at this level
+    const cancellations = Array.from(streams ?? [], async substream => {
+      // Get the metadata for the substream
+      const substreamMetadata = ReadableStreamRegistry.get(substream);
+      // Cancel the substream, passing its id as a reason (optional)
+      await originalReadableStreamCancel.apply(substream, args ?? [substreamMetadata?.id]);
+
+      // Get the parent stream
+      const parent = substreamMetadata?.parent!;
+      // Get the metadata for the parent
+      const metadata = ReadableStreamRegistry.get(parent);
+      // Wait for the parent's available promise to ensure it's ready
+      await metadata?.available;
+
+      // Remove the substream from the parent's children
+      metadata?.children.delete(substream);
+      // Remove the substream from the registry
+      ReadableStreamRegistry.delete(substream);
+
+      // Return the substream's metadata for debugging or logging
+      return Object.assign({}, substreamMetadata, substream);
+    });
+
+    // Wait for all cancellations at this level to complete
+    await Promise.all(cancellations);
+  }
+
+  // Clean up the currentStreams map
+  AvailableReadableStream.delete(sourceStream);
+  ReadableStreamCounter.delete(sourceStream);
 }
 
 /**
@@ -555,17 +550,4 @@ export async function enhancedPipeTo<T>(
     reader.releaseLock();
     writer.releaseLock();
   }
-}
-
-
-/**
- * Type guard to check if a reader is a BYOB reader.
- *
- * @param reader - The reader to check.
- * @returns True if the reader is a BYOB reader, false otherwise.
- */
-function isBYOBReader(
-  reader: any,
-): reader is ReadableStreamBYOBReader {
-  return 'readAtLeast' in reader || 'byobRequest' in reader;
 }
