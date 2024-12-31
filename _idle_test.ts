@@ -1,5 +1,4 @@
-import { test } from "@libs/testing";
-import { expect } from "@std/expect";
+import { test, expect } from "@libs/testing";
 import { idle, cancelIdle, IDLE_TIMEOUT } from "./_idle.ts";
 
 /**
@@ -46,7 +45,7 @@ function simulateRequestIdleCallbackUnavailable() {
 }
 
 // Test Case 1: Idle callback is called with `requestIdleCallback` available
-test("all")(
+test(
   "idle callback is called with requestIdleCallback available",
   async () => {
     const restore = simulateRequestIdleCallbackAvailable();
@@ -70,7 +69,7 @@ test("all")(
 );
 
 // Test Case 2: Idle callback is called without `requestIdleCallback` (fallback)
-test("all")(
+test(
   "idle callback is called without requestIdleCallback (fallback)",
   async () => {
     const restore = simulateRequestIdleCallbackUnavailable();
@@ -94,7 +93,7 @@ test("all")(
 );
 
 // Test Case 4: Cancel idle callback before it's called (`requestIdleCallback` available)
-test("all")(
+test(
   "idle callback is not called if canceled before execution with requestIdleCallback",
   async () => {
     const restore = simulateRequestIdleCallbackAvailable();
@@ -118,7 +117,7 @@ test("all")(
 );
 
 // Test Case 5: Cancel idle callback before it's called (fallback scenario)
-test("all")(
+test(
   "idle callback is not called if canceled before execution without requestIdleCallback",
   async () => {
     const restore = simulateRequestIdleCallbackUnavailable();
@@ -142,7 +141,7 @@ test("all")(
 );
 
 // Test Case 6: Schedule multiple idle callbacks and cancel one
-test("all")("only non-canceled idle callbacks are called", async () => {
+test("only non-canceled idle callbacks are called", async () => {
   const restore = simulateRequestIdleCallbackUnavailable();
 
   let callback1Called = false;
@@ -169,7 +168,7 @@ test("all")("only non-canceled idle callbacks are called", async () => {
 });
 
 // Test Case 7: Schedule idle callback with zero timeout
-test("all")("idle callback is called immediately with zero timeout", async () => {
+test("idle callback is called immediately with zero timeout", async () => {
   const restore = simulateRequestIdleCallbackUnavailable();
 
   let callbackCalled = false;

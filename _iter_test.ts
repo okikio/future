@@ -1,10 +1,9 @@
 import { splitIter, splitIterBy } from "./_iter.ts";
 
-import { test } from "@libs/testing";
-import { expect } from "@std/expect";
+import { test, expect } from "@libs/testing";
 
 // Test for split function
-test("all")(
+test(
   "split should correctly split valid values and errors",
   async () => {
     async function* sourceIterator() {
@@ -29,7 +28,7 @@ test("all")(
 );
 
 // Test for splitBy function with predicate
-test.only("deno")(
+test.only(
   "splitBy should correctly split based on predicate",
   async () => {
     async function* sourceIterator() {
@@ -63,7 +62,7 @@ test.only("deno")(
 );
 
 // Test for splitBy function with errors
-test("all")("splitBy should handle errors correctly", async () => {
+test("splitBy should handle errors correctly", async () => {
   async function* sourceIterator() {
     yield 1;
     await new Promise((resolve) => setTimeout(resolve, 1000));

@@ -1,6 +1,5 @@
 import type { EnhancedReadableStream } from "./_enhanced_readable_stream.ts";
 import { enhanceReadableStream } from "./_enhanced_readable_stream.ts";
-import { streamTee } from "./_stream.ts";
 
 /**
  * Creates a unidirectional communication channel built on Web Streams, allowing data to flow from one or more writers to multiple independent readers.
@@ -162,65 +161,15 @@ export function createChannel<T>(): Channel<T> {
     },
 
     /**
-     * Closes the channel by closing the shared writer and canceling all branches of the readable stream.
-     */
-    close() {
-      // sharedWriter.close(); // Close the writable stream
-      // ReadableStreamSet.forEach((stream) => {
-        // return stream[Symbol.dispose]();
-
-        // if (stream.locked) {
-        //   console.log({ dispose: stream[Symbol.dispose] })
-        //   stream.getReader().releaseLock(); // Release the reader lock
-        // }
-
-        // // Cancel all readable branches
-        // return stream.cancel();
-      // });
-
-      console.log({
-        enhancedReadableStream: enhancedReadableStream
-      })
-      if (enhancedReadableStream.locked) {
-        const reader = enhancedReadableStream.getReader();
-        reader.releaseLock(); // Release the reader lock
-      }
-
-      enhancedReadableStream.cancel();
-      ReadableStreamSet.clear(); // Clear the set of readers
-    },
-
-    /**
-     * Disposes of the channel resources using the Symbol.dispose protocol.
-     */
-    [Symbol.dispose]() {
-      this.close();
-    },
-
-    /**
      * Asynchronously disposes of the channel resources using the Symbol.asyncDispose protocol.
      * This ensures that all readers are properly canceled and cleaned up asynchronously.
      * @returns A promise that resolves when the disposal is complete.
      */
     async [Symbol.asyncDispose]() {
-      await sharedWriter.close();
-      await Promise.all(
-        Array.from(ReadableStreamSet, reader => {
-          if (reader.locked) {
-            reader.getReader().releaseLock(); // Release the reader lock
-          }
-
-          // Cancel all readable branches
-          return reader.cancel();
-        }),
-      );
-
-      if (readableStream.locked) {
-        readableStream.getReader().releaseLock(); // Release the reader lock
-      }
-
-      readableStream.cancel();
-      ReadableStreamSet.clear(); // Clear the set of readers
+      await Promise.all([
+        sharedWriter.close(), // Close the writable stream
+        enhancedReadableStream.cancel(),
+      ]);
     },
   };
 }
@@ -390,22 +339,15 @@ export function createBidirectionalChannel<
     },
 
     /**
-     * Disposes of the bidirectional channel resources using the Symbol.dispose protocol.
-     * This ensures that all streams are closed and resources are released.
-     */
-    [Symbol.dispose]() {
-      channelAtoB.close();
-      channelBtoA.close();
-    },
-
-    /**
      * Asynchronously disposes of the bidirectional channel resources using the Symbol.asyncDispose protocol.
      * This ensures that all streams are closed and resources are released asynchronously.
      * @returns A promise that resolves when the disposal is complete.
      */
     async [Symbol.asyncDispose]() {
-      await channelAtoB[Symbol.asyncDispose]();
-      await channelBtoA[Symbol.asyncDispose]();
+      await Promise.all([
+        channelAtoB[Symbol.asyncDispose](),
+        channelBtoA[Symbol.asyncDispose](),
+      ]);
     },
   };
 }
@@ -454,16 +396,6 @@ export interface Channel<T> {
   readonly readable: EnhancedReadableStream<T>;
 
   /**
-   * Closes the channel by closing the shared writer and canceling all branches of the readable stream.
-   */
-  close(): void;
-
-  /**
-   * Disposes of the channel resources using the Symbol.dispose protocol.
-   */
-  [Symbol.dispose](): void;
-
-  /**
    * Asynchronously disposes of the channel resources using the Symbol.asyncDispose protocol.
    * This ensures that all readers are properly canceled and cleaned up asynchronously.
    * @returns A promise that resolves when the disposal is complete.
@@ -493,12 +425,6 @@ export interface BidirectionalChannel<TRequest, TResponse> {
     readonly writer: WritableStreamDefaultWriter<TResponse>;
     readonly readable: EnhancedReadableStream<TRequest>;
   };
-
-  /**
-   * Disposes of the bidirectional channel resources using the Symbol.dispose protocol.
-   * This ensures that all streams are closed and resources are released.
-   */
-  [Symbol.dispose](): void;
 
   /**
    * Asynchronously disposes of the bidirectional channel resources using the Symbol.asyncDispose protocol.

@@ -4,7 +4,7 @@ import { expect } from "@std/expect";
 import * as Future from "./mod.ts";
 
 // Test when the Future resolves before the deadline
-test("deno")(
+test(
   "withDeadline should resolve if Future completes before the deadline",
   async () => {
     const future = Future.from(async function* () {

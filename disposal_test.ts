@@ -19,7 +19,7 @@ class MockAsyncDisposable {
 }
 
 // Test Case UDS1: Disposable value with DisposableStack
-test("all")("useDisposableStack - disposable value with DisposableStack", () => {
+test("useDisposableStack - disposable value with DisposableStack", () => {
   const stack = new DisposableStack();
   const disposable = new MockDisposable();
 
@@ -34,7 +34,7 @@ test("all")("useDisposableStack - disposable value with DisposableStack", () => 
 });
 
 // Test Case UDS2: non-disposables e.g. null and undefined
-test("all")("useDisposableStack - non-disposables e.g. null and undefined", () => {
+test("useDisposableStack - non-disposables e.g. null and undefined", () => {
   const stack = new DisposableStack();
   const result1 = useDisposableStack(null, stack);
   const result2 = useDisposableStack(undefined, stack);
@@ -46,7 +46,7 @@ test("all")("useDisposableStack - non-disposables e.g. null and undefined", () =
 });
 
 // Test Case UDS5: Mixed iterable of disposables and non-disposables
-test("all")("useDisposableStack - mixed iterable of disposables and non-disposables", () => {
+test("useDisposableStack - mixed iterable of disposables and non-disposables", () => {
   const stack = new DisposableStack();
   const disposable1 = new MockDisposable();
   const nonDisposable = {};
@@ -74,7 +74,7 @@ test("all")("useDisposableStack - mixed iterable of disposables and non-disposab
 });
 
 // Test Case UDS6: AsyncIterable with AsyncDisposableStack
-test("all")("useDisposableStack - async iterable with AsyncDisposableStack", async () => {
+test("useDisposableStack - async iterable with AsyncDisposableStack", async () => {
   const stack = new AsyncDisposableStack();
   const disposable1 = new MockAsyncDisposable();
   const disposable2 = new MockAsyncDisposable();
@@ -100,7 +100,7 @@ test("all")("useDisposableStack - async iterable with AsyncDisposableStack", asy
 });
 
 // Test Case UDS7: Non-disposable value with DisposableStack
-test("all")("useDisposableStack - non-disposable value with DisposableStack", () => {
+test("useDisposableStack - non-disposable value with DisposableStack", () => {
   const stack = new DisposableStack();
   const nonDisposable = { data: 42 };
 
@@ -116,7 +116,7 @@ test("all")("useDisposableStack - non-disposable value with DisposableStack", ()
 });
 
 // Test Case UDS8: Disposable value without disposal methods
-test("all")("useDisposableStack - value without disposal methods", () => {
+test("useDisposableStack - value without disposal methods", () => {
   const stack = new DisposableStack();
   const invalidDisposable = { disposed: false };
 
@@ -136,7 +136,7 @@ test("all")("useDisposableStack - value without disposal methods", () => {
 });
 
 // Test Case UDS9: Mixed iterable with missing disposal methods
-test("all")("useDisposableStack - iterable with missing disposal methods", () => {
+test("useDisposableStack - iterable with missing disposal methods", () => {
   const stack = new DisposableStack();
   const disposable = {
     disposed: false,
@@ -162,7 +162,7 @@ test("all")("useDisposableStack - iterable with missing disposal methods", () =>
 });
 
 // Test Case AB1: Signal already aborted
-test("all")("abortable - signal already aborted", async () => {
+test("abortable - signal already aborted", async () => {
   const controller = new AbortController();
   controller.abort(new Error("Aborted before creation"));
 
@@ -180,7 +180,7 @@ test("all")("abortable - signal already aborted", async () => {
 });
 
 // Test Case AB2: Signal aborts after promise creation
-test("all")("abortable - signal aborts after promise creation", async () => {
+test("abortable - signal aborts after promise creation", async () => {
   const controller = new AbortController();
 
   const abortablePromise = abortable(controller);
@@ -199,7 +199,7 @@ test("all")("abortable - signal aborts after promise creation", async () => {
 });
 
 // Test Case AB3: Dispose promise before aborting
-test("all")("abortable - dispose promise before aborting", async () => {
+test("abortable - dispose promise before aborting", async () => {
   const controller = new AbortController();
 
   const abortablePromise = abortable(controller);
@@ -217,7 +217,7 @@ test("all")("abortable - dispose promise before aborting", async () => {
 
 
 // Test Case TO1: Default behavior (rejects after timeout)
-test("all")("timeout - default behavior (rejects after timeout)", async () => {
+test("timeout - default behavior (rejects after timeout)", async () => {
   const timeoutPromise = timeout(100);
 
   const start = Date.now();
@@ -235,7 +235,7 @@ test("all")("timeout - default behavior (rejects after timeout)", async () => {
 });
 
 // Test Case TO3: Abort before timeout
-test("all")("timeout - abort before timeout", async () => {
+test("timeout - abort before timeout", async () => {
   const controller = new AbortController();
 
   const timeoutPromise = timeout(1000, { abort: controller.signal });
@@ -254,7 +254,7 @@ test("all")("timeout - abort before timeout", async () => {
 });
 
 // Test Case TO4: Dispose before timeout
-test("all")("timeout - dispose before timeout", async () => {
+test("timeout - dispose before timeout", async () => {
   const timeoutPromise = timeout(100);
 
   // Dispose the promise before the timeout
@@ -269,7 +269,7 @@ test("all")("timeout - dispose before timeout", async () => {
 
 
 // Test Case TO2: Resolve on timeout (reject: false)
-test("all")("timeout - resolve on timeout (reject: false)", async () => {
+test("timeout - resolve on timeout (reject: false)", async () => {
   const timeoutPromise = timeout(100, { reject: false });
 
   const start = Date.now();
@@ -283,7 +283,7 @@ test("all")("timeout - resolve on timeout (reject: false)", async () => {
 });
 
 // Test Case TO5: Zero timeout value
-test("all")("timeout - zero timeout value", async () => {
+test("timeout - zero timeout value", async () => {
   const timeoutPromise = timeout(0);
 
   try {
@@ -298,7 +298,7 @@ test("all")("timeout - zero timeout value", async () => {
 });
 
 // Test Case TO6: Negative timeout value
-test("all")("timeout - negative timeout value", async () => {
+test("timeout - negative timeout value", async () => {
   const timeoutPromise = timeout(-100);
 
   try {
@@ -313,7 +313,7 @@ test("all")("timeout - negative timeout value", async () => {
 });
 
 // Test Case TO7: Abort after timeout has occurred
-test("all")("timeout - abort after timeout has occurred", async () => {
+test("timeout - abort after timeout has occurred", async () => {
   const controller = new AbortController();
 
   const timeoutPromise = timeout(100, { abort: controller.signal });

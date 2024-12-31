@@ -47,14 +47,11 @@
     "./stream": "./stream.ts"
   },
   "imports": {
-    "@libs/testing": "jsr:@libs/testing@^2.2.3",
-    "@nick/dispose": "jsr:@nick/dispose@^1.1.0",
-    "@std/expect": "jsr:@std/expect@^1.0.0",
-    "@std/testing": "jsr:@std/testing@^1.0.0"
+    "@libs/testing": "jsr:@libs/testing@^4.0.1",
+    "@nick/dispose": "jsr:@nick/dispose@^1.1.0"
   },
   "tasks": {
-    "test": "deno test -RW --allow-run=deno,bun,node,npx --clean --trace-leaks",
-    "dev": "deno task test --filter='/^\\[deno\\]/'",
-    "test:deno-future": "DENO_FUTURE=2 && deno task test"
+    "test": "deno test -RW --clean --trace-leaks",
+    "dev": "deno task test --filter='/^DENO/'"
   }
 }
