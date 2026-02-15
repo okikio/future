@@ -14,120 +14,146 @@ import {
 import { Future } from "./future.ts";
 
 /**
- * Creates a `Future` from an operation, such as an async generator, a promise-like object,
- * or any kind of iterable. This method converts different types of async tasks into a Future.
- *
- * ### What Does `from` Do?
- *
- * It takes an operation (which could be a promise, an iterator, an iterable, etc.) and wraps it
- * inside a `Future`, making it possible to control its execution with pause/resume/cancel functionalities.
- *
- * ### Supported Types:
- *
- * - **PromiseLike**: Handles promise-based operations that resolve asynchronously.
- * - **AsyncIterable/Iterable**: Supports both async and sync iterables (like arrays or streams).
- * - **AsyncGenerator/Generator**: Handles both async and sync generators.
- *
- * @param operation The operation to convert into a Future. It could be a promise-like object,
- * a generator, an async generator, an iterator, or an iterable.
- *
- * @returns A future representing the given operation.
- *
- * ### How It Works:
- *
- * **Push-Based**:
- * - This is the traditional workflow where the generator (or operation) autonomously pushes values to the consumer.
- * - In this scenario, the generator continues yielding values until it is complete.
- *
- * @example Push-Based Workflow:
+ * Converts any async operation into a generator-based Future.
+ * 
+ * This is the primary way to create Futures. It accepts Promises, iterables, generators, streams,
+ * or raw values and wraps them in the async generator foundation that powers Futures. The result
+ * works like a Promise but has generator capabilities.
+ * 
+ * ## Promise Replacement Usage
+ * 
+ * Convert Promises to Futures - they work identically:
+ * 
  * ```typescript
- * const future = Future.from(async function* () {
- *   yield 1;
- *   yield 2;
- *   yield 3;
- *   return 4;
+ * // Promise → Future (Promise-compatible)
+ * const future = from(fetch('/api/data'));
+ * const data = await future;  // Just like: await promise
+ * ```
+ * 
+ * ## Generator Foundation
+ * 
+ * The real power comes from using async generator functions, which enable features
+ * Promises fundamentally cannot support:
+ * 
+ * ```typescript
+ * const future = from(async function* () {
+ *   yield "loading...";        // Progress update (impossible with Promises)
+ *   const data = await fetch('/api');
+ *   yield "processing...";     // More progress
+ *   return await data.json();  // Final result
  * });
- *
- * for await (const value of future) {
- *   console.log(value); // Logs 1, 2, 3
+ * 
+ * // Use like Promise
+ * const result = await future.toPromise();
+ * 
+ * // OR leverage generator yields
+ * for await (const status of future) {
+ *   console.log(status);  // "loading...", "processing..."
  * }
  * ```
- *
- * **Pull-Based**:
- * - In this more advanced workflow, the generator waits for the consumer to "pull" the next value.
- * - Each time the consumer calls `next()`, a value is passed into the generator, resuming its execution.
- *
- * @example Pull-Based Workflow:
+ * 
+ * ## Push vs Pull Workflows
+ * 
+ * The async generator foundation supports both autonomous (push) and interactive (pull) modes:
+ * 
+ * ### Push-Based (Traditional)
+ * 
+ * Generator autonomously yields values - works like a data stream:
+ * 
  * ```typescript
- * const future = Future.from(async function* () {
- *   let result = { value: 1, done: false };
- *
- *   while (!result.done) {
- *     result = await (yield result.value);  // Wait for input from the consumer
- *   }
- *
- *   return result.value;
+ * const future = from(async function* () {
+ *   yield 1;  // Generator pushes values
+ *   yield 2;
+ *   return 3;
  * });
- *
- * const iterator = future[Symbol.asyncIterator]();
- * console.log(await iterator.next());  // { value: 1, done: false }
- * console.log(await iterator.next({ value: 2, done: false }));  // { value: 2, done: false }
- * console.log(await iterator.next({ value: 3, done: true }));   // { value: 3, done: true }
- * ```
- *
- * ### Push vs. Pull:
- * - **Push-Based**: The generator automatically pushes values without waiting for any input.
- * - **Pull-Based**: The generator waits for input before it can produce the next value.
- *
- * ### Explanation of Iterators and Iterables:
- * - **Iterator**: An object that represents a sequence of values. It has a `.next()` method that returns the next value in the sequence.
- * - **Iterable**: An object that implements the `Symbol.iterator` method, returning an iterator.
- * - **Async Iterators**: Similar to iterators but work with `Promise` objects and use `for await...of` loops for asynchronous iteration.
- *
- * ### Handling Different Types:
- *
- * @example Handling a simple promise-like operation:
- * ```typescript
- * const future = Future.from(Promise.resolve(42));
- * const result = await future.toPromise(); // result is 42
- * ```
- *
- * @example Handling a synchronous iterable (like an array):
- * ```typescript
- * const future = Future.from([1, 2, 3]);
+ * 
  * for await (const value of future) {
- *   console.log(value); // Logs 1, 2, and 3
+ *   console.log(value);  // Passively receives: 1, 2
  * }
  * ```
- *
- * @example Handling an async generator:
+ * 
+ * ### Pull-Based (Interactive)
+ * 
+ * Consumer controls generator execution by sending values back - bidirectional communication
+ * unique to generators, impossible with Promises:
+ * 
  * ```typescript
- * const future = Future.from(async function* () {
- *   yield 1;
- *   yield 2;
- *   yield 3;
- *   return 4;
- * });
- *
- * const result = await future.toPromise(); // result is 4
- * ```
- *
- * @example Handling an async generator with a pull-based workflow:
- * ```typescript
- * const future = Future.from(async function* (abort: AbortController) {
- *   const initialResult = { value: 1, done: false };
- *   let result = initialResult;
- *
- *   while (!result.done) {
- *     result = await (yield result.value);  // Pull-based: wait for external input
+ * const future = from(async function* () {
+ *   let count = 0;
+ *   let input;
+ *   
+ *   while (count < 5) {
+ *     input = yield count;  // Yield AND wait for input
+ *     count = input + 1;    // Use input to control flow
  *   }
- *   return result.value;
+ *   
+ *   return count;
  * });
- *
+ * 
  * const iterator = future[Symbol.asyncIterator]();
- * console.log(await iterator.next());  // { value: 1, done: false }
- * console.log(await iterator.next({ value: 2, done: false }));  // { value: 2, done: false }
- * console.log(await iterator.next({ value: 3, done: true }));   // { value: 3, done: true }
+ * await iterator.next();     // { value: 0, done: false }
+ * await iterator.next(5);    // Send 5 back, get { value: 6, done: false }
+ * await iterator.next(10);   // Send 10 back, get { value: 11, done: false }
+ * ```
+ * 
+ * ## Supported Input Types
+ * 
+ * Converts any async operation to a generator-based Future:
+ * 
+ * - **Async Generator Functions**: Used directly, preserving all generator features
+ * - **Promises**: Wrapped in a generator that yields once and returns the value
+ * - **Iterables/Iterators**: Converted to generators that yield each item
+ * - **ReadableStreams**: Converted to generators that yield chunks
+ * - **Raw Values**: Wrapped in a generator that immediately returns the value
+ * 
+ * @param operation - Any async operation to convert into a generator-based Future
+ * @returns Future built on async generator foundation
+ * 
+ * @example Promise to Future (Promise-compatible)
+ * ```typescript
+ * const future = from(Promise.resolve(42));
+ * const result = await future;  // 42
+ * ```
+ * 
+ * @example Array to Future (yields each item)
+ * ```typescript
+ * const future = from([1, 2, 3]);
+ * for await (const value of future) {
+ *   console.log(value);  // 1, 2, 3
+ * }
+ * ```
+ * 
+ * @example ReadableStream to Future (yields chunks)
+ * ```typescript
+ * const response = await fetch('/api/data');
+ * const future = from(response.body);
+ * 
+ * for await (const chunk of future) {
+ *   processChunk(chunk);
+ * }
+ * ```
+ * 
+ * @example Generator function with cancellation
+ * ```typescript
+ * const future = from(async function* (abort) {
+ *   for (let i = 0; i < 100; i++) {
+ *     abort.signal.throwIfAborted();  // Generator can be cancelled
+ *     yield i;
+ *   }
+ * });
+ * 
+ * setTimeout(() => future.cancel(), 1000);  // Calls generator.return()
+ * ```
+ * 
+ * @example Generator with resource cleanup
+ * ```typescript
+ * const future = from(async function* (_, disposables) {
+ *   const file = await Deno.open("data.txt");
+ *   disposables.use(file);  // Auto-cleanup via generator finally
+ *   
+ *   yield "reading...";
+ *   return await file.readAll();
+ * });
  * ```
  */
 export function from<T, TReturn = T, TNext = unknown>(

@@ -192,7 +192,12 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   }
 
   /**
-   * Pauses the execution of the future.
+   * Pauses the async generator execution.
+   * 
+   * The generator remains in its current state - when resumed, it continues from where it paused.
+   * This is possible because generators are inherently pausable, unlike Promise chains which
+   * execute continuously once started.
+   * 
    * @example
    * ```typescript
    * import * as Future from "./mod.ts";
@@ -200,7 +205,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
    *   yield 42;
    *   return 100;
    * });
-   * future.pause(); // Pauses future execution
+   * future.pause(); // Generator stops between yields
    * ```
    */
   pause(): Future<T, TReturn, TNext> {
@@ -211,7 +216,11 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   }
 
   /**
-   * Resumes a paused future.
+   * Resumes a paused async generator.
+   * 
+   * Continues generator execution from where it was paused. The generator's state
+   * (local variables, position) is preserved during pause.
+   * 
    * @example
    * ```typescript
    * import * as Future from "./mod.ts";
@@ -219,7 +228,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
    *   yield 42;
    *   return 100;
    * });
-   * future.resume(); // Resumes future execution
+   * future.resume(); // Generator continues execution
    * ```
    */
   resume(): Future<T, TReturn, TNext> {
@@ -230,9 +239,13 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   }
 
   /**
-   * Resets the future for re-execution, allowing it to run from the beginning.
-   * This can only be done if the future is complete.
-   * @throws Error if the future is not complete.
+   * Resets the async generator for re-execution from the beginning.
+   * 
+   * Creates a new generator instance from the original operation function. This allows
+   * the same Future to be executed multiple times, unlike Promises which can only resolve once.
+   * 
+   * @throws Error if the future is not complete or is destroyed
+   * 
    * @example
    * ```typescript
    * import * as Future from "./mod.ts";
@@ -240,8 +253,10 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
    *   yield 42;
    *   return 100;
    * });
-   * await future.toPromise(); // Completes the future
-   * future.reset(); // Resets the future for reuse
+   * 
+   * await future.toPromise(); // First execution: returns 100
+   * future.reset();            // Create new generator instance
+   * await future.toPromise(); // Second execution: returns 100 again
    * ```
    */
   reset(): Future<T, TReturn, TNext> {
@@ -274,15 +289,30 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   }
 
   /**
-   * Cancels the future, preventing further execution.
+   * Cancels the future by aborting its underlying async generator.
+   * 
+   * Uses the generator's `.return()` method to terminate execution, which triggers
+   * finally blocks for resource cleanup. This is a key advantage over Promises, which
+   * have no cancellation mechanism.
+   * 
+   * @param reason - Optional cancellation reason
+   * 
    * @example
    * ```typescript
    * import * as Future from "./mod.ts";
-   * const future = Future.from(async function* () {
-   *   yield 42;
-   *   return 100;
+   * const future = Future.from(async function* (abort) {
+   *   try {
+   *     for (let i = 0; i < 100; i++) {
+   *       abort.signal.throwIfAborted();  // Check for cancellation
+   *       yield i;
+   *     }
+   *   } finally {
+   *     // Generator finally block runs on cancellation
+   *     cleanup();
+   *   }
    * });
-   * future.cancel(); // Aborts future execution
+   * 
+   * future.cancel(); // Triggers generator.return(), runs finally block
    * ```
    */
   async cancel(reason: unknown = new CancellationError()): Promise<
