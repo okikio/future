@@ -1,8 +1,8 @@
 # @okikio/future
 
-> A powerful, flexible async task management library that goes beyond Promises
+> Use Futures like Promises, get superpowers from async generators
 
-**@okikio/future** provides an advanced `Future` class as a modern alternative to JavaScript's native `Promise`, addressing several critical limitations while offering enhanced control, composability, and structured concurrency.
+**@okikio/future** provides a `Future` class that works as a drop-in Promise replacement, but with powerful capabilities enabled by its async generator foundation: pause/resume execution, cancel operations, yield multiple values, and control flow interactively.
 
 ## 📖 Table of Contents
 
@@ -18,34 +18,53 @@
 
 ## 🎯 Why Future?
 
-JavaScript Promises have served us well, but they have fundamental limitations:
+Futures work like Promises - you can `await` them, use `.then()`, and handle errors with `.catch()`. But under the hood, they're built on async generators, giving you capabilities Promises can't provide.
 
-### Promise Limitations
-
-| Issue | Problem | Future Solution |
-|-------|---------|-----------------|
-| **No Cancellation** | Promises can't be cancelled once started | `future.cancel()` with AbortController integration |
-| **No Pause/Resume** | Can't control execution flow | `future.pause()` and `future.resume()` |
-| **Single Value** | Only resolve with one value | Yield multiple values via async iteration |
-| **No Structured Concurrency** | Hard to manage concurrent operations | Built-in concurrency control with `all()`, `race()`, `withConcurrencyLimit()` |
-| **Memory Leaks** | No built-in cleanup | Automatic resource disposal with `AsyncDisposableStack` |
-| **Limited Composition** | Complex to chain operations | Rich composition API with `scope()`, `split()`, `splitBy()` |
-
-### Future Advantages
+### Use Futures Like Promises
 
 ```typescript
-// ❌ Promise: No cancellation
-const promise = fetch('/api/data');
-// Can't cancel if user navigates away
-
-// ✅ Future: Full cancellation support
-const future = Future.from(async function* (abort) {
-  const response = await fetch('/api/data', { signal: abort.signal });
+// Works exactly like a Promise
+const future = Future.from(async function* () {
+  const response = await fetch('/api/data');
   return await response.json();
 });
 
-// Cancel anytime
-await future.cancel();
+const data = await future;  // Just like: await promise
+```
+
+### Get Generator Superpowers
+
+The async generator foundation enables features Promises fundamentally cannot support:
+
+| Capability | Promises | Futures | Why Generators Enable This |
+|------------|----------|---------|---------------------------|
+| **Cancellation** | ❌ No | ✅ Yes | Generator's `return()` method terminates execution |
+| **Pause/Resume** | ❌ No | ✅ Yes | Generator execution is inherently pausable |
+| **Multiple Values** | ❌ Single value | ✅ Yield many | Generators yield sequences, not single values |
+| **Interactive Flow** | ❌ No | ✅ Pull-based | Generator `next(value)` enables two-way communication |
+| **Progress Tracking** | ❌ No | ✅ Intermediate yields | Each `yield` provides progress updates |
+| **Resource Cleanup** | ❌ Manual | ✅ Automatic | Generator finally blocks + DisposableStack integration |
+
+### How It Works
+
+Futures wrap async generator functions. When you use a Future like a Promise (with `await` or `.toPromise()`), it runs the generator to completion. But you can also iterate through yielded values, pause execution, or interact with the generator directly.
+
+```typescript
+// The async generator foundation
+const future = Future.from(async function* () {
+  yield "loading...";        // Progress update
+  const data = await fetch('/api');
+  yield "processing...";     // More progress
+  return await data.json();  // Final result
+});
+
+// Use like Promise - just get final result
+const result = await future.toPromise();  // Gets the returned value
+
+// OR iterate through all yields (including progress)
+for await (const value of future) {
+  console.log(value);  // "loading...", "processing..."
+}
 ```
 
 ## 📦 Installation
@@ -66,99 +85,129 @@ pnpm add @okikio/future
 
 ## 🚀 Quick Start
 
-### Creating a Future
+### Simple: Use Like a Promise
 
 ```typescript
 import { Future } from "@okikio/future";
 
-// From an async generator
+// Works just like Promise.resolve()
 const future = Future.from(async function* () {
-  yield 1;
-  yield 2;
-  yield 3;
-  return 4;
+  return await fetch('/api/data').then(r => r.json());
 });
 
-// Iterate through values
-for await (const value of future) {
-  console.log(value); // Logs: 1, 2, 3
-}
-
-// Or convert to promise
-const result = await future.toPromise(); // Returns: 4
+const data = await future;  // That's it!
 ```
 
-### Pause and Resume
+### Advanced: Leverage the Generator
+
+```typescript
+// Yield multiple values as work progresses
+const future = Future.from(async function* () {
+  yield "Starting...";
+  const users = await fetch('/api/users').then(r => r.json());
+  
+  yield "Got users, fetching posts...";
+  const posts = await fetch('/api/posts').then(r => r.json());
+  
+  return { users, posts };  // Final result
+});
+
+// Track progress through yields
+for await (const status of future) {
+  console.log(status);  // "Starting...", "Got users, fetching posts..."
+}
+
+// Or just get the final result
+const data = await future.toPromise();  // { users, posts }
+```
+
+### Control Flow: Pause, Resume, Cancel
 
 ```typescript
 const future = Future.from(async function* () {
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 100; i++) {
     yield i;
   }
 });
 
-// Pause execution
-future.pause();
-
-// Resume after 2 seconds
-setTimeout(() => future.resume(), 2000);
-
-for await (const value of future) {
-  console.log(value); // Controlled flow
-}
-```
-
-### Cancellation
-
-```typescript
-const future = Future.from(async function* (abort) {
-  for (let i = 0; i < 100; i++) {
-    // Check if cancelled
-    abort.signal.throwIfAborted();
-    
-    yield await fetch(`/api/item/${i}`);
-  }
-});
-
-// Cancel after 5 seconds
-setTimeout(() => future.cancel(), 5000);
-
-try {
-  await future.toPromise();
-} catch (error) {
-  console.log("Future was cancelled");
-}
+future.pause();                         // Stop execution
+setTimeout(() => future.resume(), 1000); // Resume later
+setTimeout(() => future.cancel(), 5000); // Or cancel entirely
 ```
 
 ## 🧠 Core Concepts
 
-### Understanding Futures
+### Futures = Promises + Generators
 
-A **Future** represents an asynchronous computation that can:
-- **Yield multiple values** over time (like an async iterator)
-- **Be paused and resumed** for flow control
-- **Be cancelled** at any point
-- **Manage resources** automatically with disposal
-- **Compose** with other futures
+A **Future** is built on an async generator function, which gives it superpowers Promises don't have. You can use it like a Promise (just `await` it), or tap into the generator capabilities.
 
-Think of it as a **controllable stream of async values** rather than a single promise.
-
-### Pull vs Push Workflows
-
-Futures support both **push** and **pull** paradigms:
-
-#### Push-Based (Traditional)
-
-The generator autonomously yields values:
-
+**Promise-style usage:**
 ```typescript
 const future = Future.from(async function* () {
-  yield 1;  // Pushed to consumer
-  yield 2;  // Pushed to consumer
+  return 42;
+});
+
+const result = await future;  // 42
+```
+
+**Generator-style usage:**
+```typescript
+const future = Future.from(async function* () {
+  yield 1;
+  yield 2;
   return 3;
 });
 
-// Consumer passively receives
+for await (const value of future) {
+  console.log(value);  // 1, 2
+}
+const final = await future.toPromise();  // 3
+```
+
+### The Async Generator Foundation
+
+Futures wrap async generator functions (`async function*`). This foundation enables all the advanced features:
+
+- **Yields** → Multiple values, progress tracking
+- **Generator.return()** → Cancellation
+- **Pausable execution** → Pause/resume control  
+- **Bidirectional communication** → Pull-based workflows
+- **Finally blocks** → Resource cleanup
+
+```typescript
+// The generator function you provide
+Future.from(async function* (abort, disposables) {
+  // yield = emit values over time
+  yield "step 1";
+  yield "step 2";
+  
+  // abort = cancellation support
+  abort.signal.throwIfAborted();
+  
+  // disposables = automatic cleanup
+  disposables.defer(() => cleanup());
+  
+  // return = final value
+  return "done";
+});
+```
+
+### Push vs Pull Workflows
+
+The generator foundation supports two modes of iteration:
+
+#### Push-Based (Autonomous)
+
+The generator runs independently, pushing values to consumers:
+
+```typescript
+const future = Future.from(async function* () {
+  yield 1;  // Generator pushes this
+  yield 2;  // Generator pushes this
+  return 3;
+});
+
+// Consumer passively receives pushed values
 for await (const value of future) {
   console.log(value);
 }
@@ -166,7 +215,7 @@ for await (const value of future) {
 
 #### Pull-Based (Interactive)
 
-The consumer controls when values are generated:
+The consumer pulls values and can send data back into the generator:
 
 ```typescript
 const future = Future.from(async function* () {
@@ -174,8 +223,8 @@ const future = Future.from(async function* () {
   let input;
   
   while (count < 5) {
-    input = yield count;  // Wait for consumer input
-    count = input + 1;
+    input = yield count;  // Yield AND wait for input
+    count = input + 1;    // Use the input consumer sends
   }
   
   return count;
@@ -183,10 +232,13 @@ const future = Future.from(async function* () {
 
 const iterator = future[Symbol.asyncIterator]();
 
-console.log(await iterator.next());        // { value: 0, done: false }
-console.log(await iterator.next(5));       // { value: 6, done: false }
-console.log(await iterator.next(10));      // { value: 11, done: false }
+// Consumer pulls and sends values back
+console.log(await iterator.next());     // { value: 0, done: false }
+console.log(await iterator.next(5));    // { value: 6, done: false }  
+console.log(await iterator.next(10));   // { value: 11, done: false }
 ```
+
+This pull-based capability is unique to generators and impossible with Promises.
 
 ### Status Lifecycle
 

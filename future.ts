@@ -14,64 +14,123 @@ import { timeout, AsyncDisposableStack } from "./disposal.ts";
 import { GENERATOR_RETURN_TIMEOUT } from "./constants.ts";
 
 /**
- * The `Future` class is a more powerful and flexible alternative to JavaScript's native `Promise`,
- * designed to address several weaknesses of Promises such as lack of cancellation, limited concurrency control, and
- * inability to pause/resume tasks. `Future` instances are cancellable, pausable, compositional, and structured for
- * concurrency management.
- *
- * ## Key Features
- *
- * - **Pausable**: Execution can be paused and resumed at will, giving precise control over flow.
- * - **Cancellable**: Futures can be cancelled at any point.
- * - **Background Execution**: You can prepare Futures for background execution with the `inBackground` method.
- * - **Compositional**: Chain, sequence, and compose multiple futures with ease.
- * - **Advanced Concurrency Control**: Supports throttling, limiting concurrency, and structured concurrency.
- *
- * ## Usage Examples
- *
- * ### Simple Future Creation
+ * A Promise replacement built on async generators.
+ * 
+ * Use Futures exactly like Promises - `await` them, use `.then()`, handle errors with `.catch()`.
+ * But under the hood, they're powered by async generators, which enables capabilities Promises
+ * fundamentally cannot support: cancellation, pause/resume, yielding multiple values, and
+ * bidirectional communication (pull-based workflows).
+ * 
+ * ## Promise-Compatible Interface
+ * 
+ * Futures implement `PromiseLike`, so they work anywhere Promises do:
+ * 
  * ```typescript
- * import * as Future from "./mod.ts";
- *
  * const future = Future.from(async function* () {
- *   yield 42; // Pauses and returns 42
- *   return 100; // Completes and returns 100
+ *   const response = await fetch('/api/data');
+ *   return await response.json();
  * });
- *
- * console.log(await future.toPromise()); // Logs 100
+ * 
+ * const data = await future;  // Just like a Promise
  * ```
- *
- * ### Pausing and Resuming
+ * 
+ * ## Generator Superpowers
+ * 
+ * The async generator foundation enables features impossible with Promises:
+ * 
+ * ### Multiple Values via Yields
+ * 
  * ```typescript
- * import * as Future from "./mod.ts";
- *
  * const future = Future.from(async function* () {
- *   yield 1;
- *   yield 2;
- *   return 3;
+ *   yield "loading...";        // Progress update
+ *   const data = await fetch('/api');
+ *   yield "processing...";     // More progress
+ *   return await data.json();  // Final result
  * });
- *
- * future.pause();
- * setTimeout(() => future.resume(), 1000);
- *
+ * 
  * for await (const value of future) {
- *   console.log(value); // Logs 1, 2, then 3
+ *   console.log(value);  // "loading...", "processing..."
  * }
  * ```
- *
- * ### Running in the Background
+ * 
+ * ### Pause and Resume (Generator Control)
+ * 
  * ```typescript
- * import * as Future from "./mod.ts";
- *
- * const backgroundFuture = Future.inBackground(Future.from(async function* () {
- *   yield 1;
- *   return 2;
- * }));
- *
- * console.log(await backgroundFuture.toPromise()); // Executes in idle time, returns 2
+ * const future = Future.from(async function* () {
+ *   for (let i = 0; i < 100; i++) {
+ *     yield i;
+ *   }
+ * });
+ * 
+ * future.pause();   // Pauses generator execution
+ * future.resume();  // Resumes generator execution
  * ```
- *
- * @template T - The type of the value that the future will resolve to.
+ * 
+ * ### Cancellation (Generator.return())
+ * 
+ * ```typescript
+ * const future = Future.from(async function* (abort) {
+ *   for (let i = 0; i < 100; i++) {
+ *     abort.signal.throwIfAborted();  // Check cancellation
+ *     yield await fetch(`/api/item/${i}`);
+ *   }
+ * });
+ * 
+ * future.cancel();  // Stops generator via .return()
+ * ```
+ * 
+ * ### Pull-Based Workflows (Bidirectional)
+ * 
+ * Generators support bidirectional communication - consumers can send values back:
+ * 
+ * ```typescript
+ * const future = Future.from(async function* () {
+ *   let count = 0;
+ *   let input;
+ *   
+ *   while (count < 5) {
+ *     input = yield count;  // Yield value AND receive input
+ *     count = input + 1;    // Use the input
+ *   }
+ *   
+ *   return count;
+ * });
+ * 
+ * const iterator = future[Symbol.asyncIterator]();
+ * await iterator.next();     // { value: 0, done: false }
+ * await iterator.next(5);    // Send 5, get { value: 6, done: false }
+ * await iterator.next(10);   // Send 10, get { value: 11, done: false }
+ * ```
+ * 
+ * ### Resource Management (Generator Finally)
+ * 
+ * Generators have built-in cleanup via finally blocks and DisposableStack integration:
+ * 
+ * ```typescript
+ * const future = Future.from(async function* (_, disposables) {
+ *   const file = await Deno.open("data.txt");
+ *   disposables.use(file);  // Auto-cleanup on completion/cancellation
+ *   
+ *   yield "reading...";
+ *   return await file.readAll();
+ * });
+ * 
+ * await using future;  // Automatic disposal when scope exits
+ * ```
+ * 
+ * ## How It Works
+ * 
+ * When you create a Future with `Future.from(async function* () { ... })`, the generator
+ * function is wrapped but not immediately executed. Execution starts when you:
+ * - Call `.toPromise()` or `await` the Future
+ * - Start iterating with `for await` or `.next()`
+ * 
+ * The generator runs until completion, pause, or cancellation. All generator features
+ * (yields, return, throw, bidirectional communication) are preserved and accessible.
+ * 
+ * @template T - The type yielded by the generator
+ * @template TReturn - The type returned by the generator
+ * @template TNext - The type sent back into the generator (pull-based workflows)
  */
 export class Future<T, TReturn = unknown, TNext = unknown> implements
   // @ts-ignore Iterator is defined but typescript doesn't recognize it yet
