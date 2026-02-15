@@ -2,20 +2,61 @@ import { Future } from "./future.ts";
 import { cancelIdle, idle } from "./_idle.ts";
 
 /**
- * Sets up a `Future` to execute in the background during idle time.
- *
- * This method does not execute the future itself, but prepares it to be run using
- * `requestIdleCallback`. Execution is still controlled by methods like `toPromise()` or `async` iterators.
- *
- * @param future The future to be executed in the background.
- * @returns A new `Future` instance set up for background execution.
- * @example
+ * Executes a generator-based Future during browser idle time using `requestIdleCallback`.
+ * 
+ * The async generator foundation enables fine-grained control: the generator runs in chunks
+ * during idle periods, yielding control back to the browser between iterations. Each generator
+ * yield triggers a new idle callback, ensuring the main thread stays responsive.
+ * 
+ * This is particularly valuable for long-running generators that would otherwise block the UI.
+ * The generator can still be cancelled, paused, or consumed normally - idle execution is just
+ * the scheduling mechanism.
+ * 
+ * @param future - Generator-based Future to execute during idle time
+ * @returns Future that runs its generator during browser idle periods
+ * 
+ * @example Background processing (Promise-like usage)
  * ```typescript
- * const future = Future.from(async function* () {
- *   yield 42;
- *   return 100;
+ * const future = from(async function* () {
+ *   // Heavy computation
+ *   return processLargeDataset();
  * });
- * const backgroundFuture = Future.inBackground(future); // result is 100, processed in the background
+ * 
+ * // Runs during idle time, doesn't block UI
+ * const result = await inBackground(future).toPromise();
+ * ```
+ * 
+ * @example Generator capabilities - idle execution with yields
+ * ```typescript
+ * const future = from(async function* () {
+ *   for (let i = 0; i < 1000; i++) {
+ *     yield `Processing item ${i}`;  // Each yield waits for idle
+ *     await processItem(i);
+ *   }
+ *   return "Complete";
+ * });
+ * 
+ * const bg = inBackground(future);
+ * 
+ * // Generator runs in chunks during idle time
+ * for await (const status of bg) {
+ *   updateUI(status);  // UI stays responsive
+ * }
+ * ```
+ * 
+ * @example Cancellable background work
+ * ```typescript
+ * const bg = inBackground(
+ *   from(async function* (abort) {
+ *     for (let i = 0; i < 10000; i++) {
+ *       abort.signal.throwIfAborted();  // Still cancellable
+ *       yield i;
+ *     }
+ *   })
+ * );
+ * 
+ * // Cancel even though running in background
+ * setTimeout(() => bg.cancel(), 1000);
  * ```
  */
 export function inBackground<T, TReturn, TNext>(

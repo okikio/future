@@ -14,121 +14,133 @@ import {
 import { Future } from "./future.ts";
 
 /**
- * Creates a `Future` from an operation, such as an async generator, a promise-like object,
- * or any kind of iterable. This method converts different types of async tasks into a Future.
- *
- * ### What Does `from` Do?
- *
- * It takes an operation (which could be a promise, an iterator, an iterable, etc.) and wraps it
- * inside a `Future`, making it possible to control its execution with pause/resume/cancel functionalities.
- *
- * ### Supported Types:
- *
- * - **PromiseLike**: Handles promise-based operations that resolve asynchronously.
- * - **AsyncIterable/Iterable**: Supports both async and sync iterables (like arrays or streams).
- * - **AsyncGenerator/Generator**: Handles both async and sync generators.
- *
- * @param operation The operation to convert into a Future. It could be a promise-like object,
- * a generator, an async generator, an iterator, or an iterable.
- *
- * @returns A future representing the given operation.
- *
- * ### How It Works:
- *
- * **Push-Based**:
- * - This is the traditional workflow where the generator (or operation) autonomously pushes values to the consumer.
- * - In this scenario, the generator continues yielding values until it is complete.
- *
- * @example Push-Based Workflow:
+ * Converts async operations into controllable Futures.
+ * 
+ * ## What This Does
+ * 
+ * `from()` takes any async operation (Promise, iterable, stream, function, etc.) and wraps it
+ * in a Future - giving you a controllable handle to that work. The work itself doesn't change,
+ * but now you can pause, cancel, observe, or compose it.
+ * 
+ * ## Basic Usage
+ * 
+ * Convert Promises to controllable work:
+ * 
  * ```typescript
- * const future = Future.from(async function* () {
+ * // Promise → Future (now controllable)
+ * const future = from(fetch('/api/data'));
+ * 
+ * // Can cancel it
+ * setTimeout(() => future.cancel(), 1000);
+ * 
+ * // Can await it (Promise-compatible)
+ * const data = await future;
+ * ```
+ * 
+ * ## Progress Tracking
+ * 
+ * Use async generator functions to report progress:
+ * 
+ * ```typescript
+ * const future = from(async function* () {
+ *   yield "Loading...";           // Progress update
+ *   const data = await fetch('/api');
+ *   
+ *   yield "Processing...";         // More progress
+ *   const result = await data.json();
+ *   
+ *   return result;                 // Final result
+ * });
+ * 
+ * // Option 1: Watch progress
+ * for await (const status of future) {
+ *   updateUI(status);  // "Loading...", "Processing..."
+ * }
+ * 
+ * // Option 2: Just get result
+ * const result = await future.toPromise();
+ * ```
+ * 
+ * ## Supported Inputs
+ * 
+ * Converts any async operation to a controllable Future:
+ * 
+ * ```typescript
+ * // Promises
+ * from(fetch('/api'))
+ * from(Promise.resolve(42))
+ * 
+ * // Arrays (yields each item)
+ * from([1, 2, 3, 4, 5])
+ * 
+ * // Streams
+ * from(response.body)
+ * 
+ * // Generator functions (for progress/control)
+ * from(async function* () {
  *   yield 1;
  *   yield 2;
- *   yield 3;
- *   return 4;
- * });
- *
- * for await (const value of future) {
- *   console.log(value); // Logs 1, 2, 3
- * }
+ *   return 3;
+ * })
+ * 
+ * // Plain values
+ * from(42)  // Immediately resolves to 42
  * ```
- *
- * **Pull-Based**:
- * - In this more advanced workflow, the generator waits for the consumer to "pull" the next value.
- * - Each time the consumer calls `next()`, a value is passed into the generator, resuming its execution.
- *
- * @example Pull-Based Workflow:
+ * 
+ * ## Advanced: Cancellation
+ * 
+ * Generator functions receive an AbortController for cancellation support:
+ * 
  * ```typescript
- * const future = Future.from(async function* () {
- *   let result = { value: 1, done: false };
- *
- *   while (!result.done) {
- *     result = await (yield result.value);  // Wait for input from the consumer
+ * const future = from(async function* (abort) {
+ *   for (let i = 0; i < 100; i++) {
+ *     abort.signal.throwIfAborted();  // Check if cancelled
+ *     yield await fetch(`/api/item/${i}`);
  *   }
- *
- *   return result.value;
  * });
- *
- * const iterator = future[Symbol.asyncIterator]();
- * console.log(await iterator.next());  // { value: 1, done: false }
- * console.log(await iterator.next({ value: 2, done: false }));  // { value: 2, done: false }
- * console.log(await iterator.next({ value: 3, done: true }));   // { value: 3, done: true }
+ * 
+ * // Cancel the work
+ * future.cancel();  // Stops iteration
  * ```
- *
- * ### Push vs. Pull:
- * - **Push-Based**: The generator automatically pushes values without waiting for any input.
- * - **Pull-Based**: The generator waits for input before it can produce the next value.
- *
- * ### Explanation of Iterators and Iterables:
- * - **Iterator**: An object that represents a sequence of values. It has a `.next()` method that returns the next value in the sequence.
- * - **Iterable**: An object that implements the `Symbol.iterator` method, returning an iterator.
- * - **Async Iterators**: Similar to iterators but work with `Promise` objects and use `for await...of` loops for asynchronous iteration.
- *
- * ### Handling Different Types:
- *
- * @example Handling a simple promise-like operation:
+ * 
+ * ## Advanced: Resource Cleanup
+ * 
+ * Generator functions receive a DisposableStack for automatic cleanup:
+ * 
  * ```typescript
- * const future = Future.from(Promise.resolve(42));
- * const result = await future.toPromise(); // result is 42
- * ```
- *
- * @example Handling a synchronous iterable (like an array):
- * ```typescript
- * const future = Future.from([1, 2, 3]);
- * for await (const value of future) {
- *   console.log(value); // Logs 1, 2, and 3
- * }
- * ```
- *
- * @example Handling an async generator:
- * ```typescript
- * const future = Future.from(async function* () {
- *   yield 1;
- *   yield 2;
- *   yield 3;
- *   return 4;
+ * const future = from(async function* (_, disposables) {
+ *   const file = await Deno.open("data.txt");
+ *   disposables.use(file);  // Auto-cleanup on complete/cancel
+ *   
+ *   yield "Reading...";
+ *   return await file.readAll();
  * });
- *
- * const result = await future.toPromise(); // result is 4
  * ```
- *
- * @example Handling an async generator with a pull-based workflow:
+ * 
+ * ## Advanced: Interactive Flow (Pull-Based)
+ * 
+ * Consumer can send values back to control the work:
+ * 
  * ```typescript
- * const future = Future.from(async function* (abort: AbortController) {
- *   const initialResult = { value: 1, done: false };
- *   let result = initialResult;
- *
- *   while (!result.done) {
- *     result = await (yield result.value);  // Pull-based: wait for external input
+ * const future = from(async function* () {
+ *   let count = 0;
+ *   let input;
+ *   
+ *   while (count < 5) {
+ *     input = yield count;  // Yield value, wait for input
+ *     count = input + 1;    // Use input to control flow
  *   }
- *   return result.value;
+ *   
+ *   return count;
  * });
- *
+ * 
  * const iterator = future[Symbol.asyncIterator]();
- * console.log(await iterator.next());  // { value: 1, done: false }
- * console.log(await iterator.next({ value: 2, done: false }));  // { value: 2, done: false }
- * console.log(await iterator.next({ value: 3, done: true }));   // { value: 3, done: true }
+ * await iterator.next();     // { value: 0, done: false }
+ * await iterator.next(5);    // Send 5 back, get { value: 6, done: false }
  * ```
+ * 
+ * @param operation - Any async operation to convert into a controllable Future
+ * @returns A Future providing control over the async work
  */
 export function from<T, TReturn = T, TNext = unknown>(
   operation: PromiseLike<T>,

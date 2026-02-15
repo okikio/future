@@ -5,23 +5,34 @@ import { splitIter, splitIterBy } from "./_iter.ts";
 import { fromIterator } from "./from.ts";
 
 /**
- * Splits a Future into two futures: one for resolved values and one for errors.
- *
- * @param future The original future to be split.
- * @returns An array of two futures: one for resolved values and one for errors.
- *
- * @example
- * ```ts
- * const future = Future.from(async function* () {
+ * Splits a generator-based Future into separate success and error streams.
+ * 
+ * The async generator foundation enables this capability: as the generator yields and potentially
+ * throws, the split function routes values to different output generators. Each output is itself
+ * a Future, so you can iterate, cancel, or compose them independently.
+ * 
+ * @param future - Generator-based Future to split
+ * @returns Tuple of [resolvedFuture, erroredFuture], both generators
+ * 
+ * @example Separate error handling
+ * ```typescript
+ * const future = from(async function* () {
  *   yield 1;
  *   yield 2;
- *   throw new Error("An error occurred");
+ *   throw new Error("Failed");
  * });
- *
- * const [resolvedFuture, errorFuture] = Future.split(future);
- *
- * resolvedFuture.then(console.log); // Logs 1, 2
- * errorFuture.catch(console.error); // Logs Error: An error occurred
+ * 
+ * const [resolved, errors] = split(future);
+ * 
+ * // Handle successes
+ * for await (const value of resolved) {
+ *   console.log('Success:', value);  // 1, 2
+ * }
+ * 
+ * // Handle errors separately
+ * for await (const error of errors) {
+ *   console.error('Error:', error);
+ * }
  * ```
  */
 export function split<V, E, TReturn = unknown>(

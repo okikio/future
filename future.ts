@@ -14,64 +14,92 @@ import { timeout, AsyncDisposableStack } from "./disposal.ts";
 import { GENERATOR_RETURN_TIMEOUT } from "./constants.ts";
 
 /**
- * The `Future` class is a more powerful and flexible alternative to JavaScript's native `Promise`,
- * designed to address several weaknesses of Promises such as lack of cancellation, limited concurrency control, and
- * inability to pause/resume tasks. `Future` instances are cancellable, pausable, compositional, and structured for
- * concurrency management.
- *
- * ## Key Features
- *
- * - **Pausable**: Execution can be paused and resumed at will, giving precise control over flow.
- * - **Cancellable**: Futures can be cancelled at any point.
- * - **Background Execution**: You can prepare Futures for background execution with the `inBackground` method.
- * - **Compositional**: Chain, sequence, and compose multiple futures with ease.
- * - **Advanced Concurrency Control**: Supports throttling, limiting concurrency, and structured concurrency.
- *
- * ## Usage Examples
- *
- * ### Simple Future Creation
+ * A controllable handle to asynchronous work.
+ * 
+ * ## What is a Future?
+ * 
+ * A Future represents work that will complete at some point in time. Unlike a Promise (which you
+ * can only wait for), a Future gives you control over the work itself: pause it, cancel it, check
+ * its status, or observe its progress.
+ * 
+ * Think of it like a work order or job ticket - you submit work and get back a handle that lets
+ * you control and observe that work.
+ * 
+ * ## Using Futures
+ * 
+ * ### As a Promise Replacement
+ * 
+ * Futures work exactly like Promises - `await` them, use `.then()`, handle errors:
+ * 
  * ```typescript
- * import * as Future from "./mod.ts";
- *
- * const future = Future.from(async function* () {
- *   yield 42; // Pauses and returns 42
- *   return 100; // Completes and returns 100
- * });
- *
- * console.log(await future.toPromise()); // Logs 100
+ * const future = from(fetch('/api/data').then(r => r.json()));
+ * const data = await future;  // Just like: await promise
  * ```
- *
- * ### Pausing and Resuming
+ * 
+ * ### With Control
+ * 
+ * But Futures give you control Promises don't have:
+ * 
  * ```typescript
- * import * as Future from "./mod.ts";
- *
- * const future = Future.from(async function* () {
- *   yield 1;
- *   yield 2;
- *   return 3;
+ * const future = from(longRunningTask());
+ * 
+ * future.pause();    // Pause the work
+ * future.resume();   // Resume the work
+ * future.cancel();   // Stop the work
+ * future.getStatus(); // Check current state
+ * ```
+ * 
+ * ### With Progress Observation
+ * 
+ * Futures can report progress as work happens:
+ * 
+ * ```typescript
+ * const future = from(async function* () {
+ *   yield "Step 1...";
+ *   await doStep1();
+ *   
+ *   yield "Step 2...";
+ *   await doStep2();
+ *   
+ *   return "Done";
  * });
- *
- * future.pause();
- * setTimeout(() => future.resume(), 1000);
- *
- * for await (const value of future) {
- *   console.log(value); // Logs 1, 2, then 3
+ * 
+ * for await (const status of future) {
+ *   updateUI(status);  // Track progress
  * }
  * ```
- *
- * ### Running in the Background
+ * 
+ * ## How It Works
+ * 
+ * Futures are implemented using async generators, which provide the control mechanisms:
+ * - Generators can be paused (enables `pause()/resume()`)
+ * - Generators can be terminated early (enables `cancel()`)
+ * - Generators can yield multiple values (enables progress tracking)
+ * - Generator state persists across pauses (enables stateful work)
+ * 
+ * But you don't need to think about generators. Just think: "Future = controllable async work."
+ * 
+ * ## Core Operations
+ * 
  * ```typescript
- * import * as Future from "./mod.ts";
- *
- * const backgroundFuture = Future.inBackground(Future.from(async function* () {
- *   yield 1;
- *   return 2;
- * }));
- *
- * console.log(await backgroundFuture.toPromise()); // Executes in idle time, returns 2
+ * // Control
+ * future.pause()    // Pause work
+ * future.resume()   // Resume work  
+ * future.cancel()   // Stop work
+ * future.reset()    // Restart work
+ * 
+ * // Observe
+ * future.getStatus()           // Check state
+ * for await (const x of future) // Track progress
+ * 
+ * // Consume
+ * await future                 // Get result (Promise-like)
+ * await future.toPromise()     // Get result (explicit)
  * ```
- *
- * @template T - The type of the value that the future will resolve to.
+ * 
+ * @template T - Type of values yielded during work (progress updates)
+ * @template TReturn - Type of final result when work completes
+ * @template TNext - Type for advanced pull-based workflows
  */
 export class Future<T, TReturn = unknown, TNext = unknown> implements
   // @ts-ignore Iterator is defined but typescript doesn't recognize it yet
@@ -133,7 +161,12 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   }
 
   /**
-   * Pauses the execution of the future.
+   * Pauses the async generator execution.
+   * 
+   * The generator remains in its current state - when resumed, it continues from where it paused.
+   * This is possible because generators are inherently pausable, unlike Promise chains which
+   * execute continuously once started.
+   * 
    * @example
    * ```typescript
    * import * as Future from "./mod.ts";
@@ -141,7 +174,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
    *   yield 42;
    *   return 100;
    * });
-   * future.pause(); // Pauses future execution
+   * future.pause(); // Generator stops between yields
    * ```
    */
   pause(): Future<T, TReturn, TNext> {
@@ -152,7 +185,11 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   }
 
   /**
-   * Resumes a paused future.
+   * Resumes a paused async generator.
+   * 
+   * Continues generator execution from where it was paused. The generator's state
+   * (local variables, position) is preserved during pause.
+   * 
    * @example
    * ```typescript
    * import * as Future from "./mod.ts";
@@ -160,7 +197,7 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
    *   yield 42;
    *   return 100;
    * });
-   * future.resume(); // Resumes future execution
+   * future.resume(); // Generator continues execution
    * ```
    */
   resume(): Future<T, TReturn, TNext> {
@@ -171,9 +208,13 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   }
 
   /**
-   * Resets the future for re-execution, allowing it to run from the beginning.
-   * This can only be done if the future is complete.
-   * @throws Error if the future is not complete.
+   * Resets the async generator for re-execution from the beginning.
+   * 
+   * Creates a new generator instance from the original operation function. This allows
+   * the same Future to be executed multiple times, unlike Promises which can only resolve once.
+   * 
+   * @throws Error if the future is not complete or is destroyed
+   * 
    * @example
    * ```typescript
    * import * as Future from "./mod.ts";
@@ -181,8 +222,10 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
    *   yield 42;
    *   return 100;
    * });
-   * await future.toPromise(); // Completes the future
-   * future.reset(); // Resets the future for reuse
+   * 
+   * await future.toPromise(); // First execution: returns 100
+   * future.reset();            // Create new generator instance
+   * await future.toPromise(); // Second execution: returns 100 again
    * ```
    */
   reset(): Future<T, TReturn, TNext> {
@@ -215,15 +258,30 @@ export class Future<T, TReturn = unknown, TNext = unknown> implements
   }
 
   /**
-   * Cancels the future, preventing further execution.
+   * Cancels the future by aborting its underlying async generator.
+   * 
+   * Uses the generator's `.return()` method to terminate execution, which triggers
+   * finally blocks for resource cleanup. This is a key advantage over Promises, which
+   * have no cancellation mechanism.
+   * 
+   * @param reason - Optional cancellation reason
+   * 
    * @example
    * ```typescript
    * import * as Future from "./mod.ts";
-   * const future = Future.from(async function* () {
-   *   yield 42;
-   *   return 100;
+   * const future = Future.from(async function* (abort) {
+   *   try {
+   *     for (let i = 0; i < 100; i++) {
+   *       abort.signal.throwIfAborted();  // Check for cancellation
+   *       yield i;
+   *     }
+   *   } finally {
+   *     // Generator finally block runs on cancellation
+   *     cleanup();
+   *   }
    * });
-   * future.cancel(); // Aborts future execution
+   * 
+   * future.cancel(); // Triggers generator.return(), runs finally block
    * ```
    */
   async cancel(reason: unknown = new CancellationError()): Promise<
