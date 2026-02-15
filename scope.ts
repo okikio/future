@@ -2,57 +2,58 @@ import { useDisposableStack } from "./disposal.ts";
 import { Future } from "./future.ts";
 
 /**
- * Runs multiple Futures within a defined scope, ensuring that all Futures are executed
- * with full control over their execution (e.g., pausing, resuming, and pulling/pushing values).
- *
- * This method supports `Iterable` and `AsyncIterable` containers of Futures, allowing for
- * both push-based and pull-based workflows.
- *
- * `Future.scope` is designed to handle non-concurrent execution by default, allowing you to
- * control the flow of each future one at a time. If concurrency is needed, you can use
- * `Future.all`, `Future.some`, or similar methods inside the scope.
- *
- * ### Push vs. Pull Workflows:
- *
- * - **Push-Based Workflow**: The generator yields values autonomously, and the consumer simply awaits those values.
- * - **Pull-Based Workflow**: The generator waits for external input before proceeding to the next value.
- *
- * @param futures - An iterable or async iterable of Futures to be run within the scope.
- * @returns A Future that yields the results of the contained Futures, controlled by the scope.
- *
- * ### Example Usage:
- *
+ * Executes generator-based Futures sequentially within a controlled scope.
+ * 
+ * Unlike the concurrent functions (`all`, `race`), scope runs futures one at a time, in order.
+ * The async generator foundation is crucial: each future's generator runs to completion before
+ * the next starts, and all yields from each generator appear in the output stream.
+ * 
+ * This provides structured concurrency - all futures in the scope share lifecycle and can be
+ * cancelled together via the returned Future's `.cancel()` method, which propagates to all
+ * active generators.
+ * 
+ * @param futures - Generator-based Futures to execute sequentially
+ * @returns Future that yields all intermediate values, returns array of final results
+ * 
+ * @example Sequential execution (Promise-like usage)
  * ```typescript
- * const scopeFuture = Future.scope([
- *   Future.from(async function* () {
- *     yield 42;
- *     return 100;
+ * const results = await scope([
+ *   from(fetch('/api/step1')),
+ *   from(fetch('/api/step2')),
+ *   from(fetch('/api/step3'))
+ * ]).toPromise();
+ * // Executes step1, then step2, then step3
+ * ```
+ * 
+ * @example Generator capabilities - see all yields
+ * ```typescript
+ * const scoped = scope([
+ *   from(async function* () {
+ *     yield "Task 1 starting";
+ *     await delay(100);
+ *     return "Task 1 done";
  *   }),
- *   Future.from(async function* () {
- *     yield 10;
- *     return 20;
+ *   from(async function* () {
+ *     yield "Task 2 starting";
+ *     await delay(100);
+ *     return "Task 2 done";
  *   })
  * ]);
- *
- * for await (const result of scopeFuture) {
- *   console.log(result); // Logs 100, 20
+ * 
+ * // See each generator's yields in sequence
+ * for await (const status of scoped) {
+ *   console.log(status);
+ *   // "Task 1 starting", "Task 1 done",
+ *   // "Task 2 starting", "Task 2 done"
  * }
- *
- * const pullFuture = Future.scope([
- *   Future.from(async function* () {
- *     let result = { value: 42, done: false };
- *
- *     while (!result.done) {
- *       result = await (yield result.value); // Wait for input from the consumer
- *     }
- *
- *     return result.value;
- *   })
- * ]);
- *
- * const iterator = pullFuture[Symbol.asyncIterator]();
- * console.log(await iterator.next());  // { value: 42, done: false }
- * console.log(await iterator.next({ value: 100, done: true })); // { value: 100, done: true }
+ * ```
+ * 
+ * @example Structured concurrency - cancel all
+ * ```typescript
+ * const scoped = scope([future1, future2, future3]);
+ * 
+ * // Cancel propagates to active generator
+ * setTimeout(() => scoped.cancel(), 1000);
  * ```
  */
 export function scope<T, TReturn, TNext>(
