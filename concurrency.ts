@@ -1,3 +1,20 @@
+/**
+ * Concurrency control utilities for managing parallel Future execution.
+ * 
+ * This module provides functions for controlling how multiple Futures execute concurrently,
+ * offering patterns similar to Promise utilities but with enhanced control and resource management.
+ * 
+ * ## Available Functions
+ * 
+ * - `all()` - Run all futures concurrently, wait for all to complete
+ * - `allSettled()` - Run all futures, get all results (successes and failures)
+ * - `race()` - Return the first future to complete
+ * - `some()` - Get first N futures to complete
+ * - `withConcurrencyLimit()` - Control maximum concurrent operations
+ * 
+ * @module concurrency
+ */
+
 import { useDisposableStack } from "./disposal.ts";
 import { Future } from "./future.ts";
 
