@@ -1,12 +1,9 @@
 /**
- * Concurrency control for generator-based Futures.
+ * Concurrency control for managing multiple async operations.
  * 
- * These functions work like Promise utilities (`all`, `allSettled`, `race`) but leverage
- * the async generator foundation of Futures. This enables progress tracking through yields,
- * cancellation support, and resource management that Promises can't provide.
- * 
- * All functions accept both Futures and Promises - Promises are implicitly converted to
- * simple Futures that immediately return their value.
+ * These functions help you coordinate multiple pieces of async work (Futures or Promises).
+ * They work like Promise utilities (`all`, `allSettled`, `race`) but with the control
+ * benefits of Futures: cancellation, progress tracking, and resource management.
  * 
  * @module concurrency
  */
@@ -15,51 +12,57 @@ import { useDisposableStack } from "./disposal.ts";
 import { Future } from "./future.ts";
 
 /**
- * Runs multiple generator-based Futures concurrently, like `Promise.all()`.
+ * Runs multiple async operations concurrently, waits for all to complete.
  * 
- * Because Futures are built on async generators, this function can yield intermediate
- * values as futures complete, unlike Promise.all which only returns when everything finishes.
- * The generator foundation also enables cancellation - calling `.cancel()` on the returned
- * Future will cancel all pending futures.
+ * Like `Promise.all()` - if any operation fails, the whole thing fails. But with Futures,
+ * you can cancel all operations mid-flight, and track progress as each completes.
  * 
- * Accepts both Futures and Promises. Promises are converted to simple Futures that yield
- * their resolved value once.
+ * @param futures - Async operations (Futures or Promises) to run concurrently
+ * @returns Future that completes when all operations finish
  * 
- * @param futures - Generator-based Futures or Promises to execute concurrently
- * @returns Future that yields each completed value, then returns array of all results
- * 
- * @example Simple Promise-like usage
+ * @example Basic concurrent execution
  * ```typescript
  * import { all, from } from "@okikio/future";
  * 
  * const results = await all([
  *   from(fetch('/api/users')),
- *   from(fetch('/api/posts'))
+ *   from(fetch('/api/posts')),
+ *   from(fetch('/api/comments'))
  * ]).toPromise();
- * // Returns [users, posts]
+ * // All three requests run in parallel
  * ```
  * 
- * @example Track progress via yields
+ * @example With cancellation
  * ```typescript
- * const futures = urls.map(url => 
+ * const batch = all([
+ *   from(slowOperation1()),
+ *   from(slowOperation2()),
+ *   from(slowOperation3())
+ * ]);
+ * 
+ * // Cancel all operations if taking too long
+ * setTimeout(() => batch.cancel(), 5000);
+ * 
+ * try {
+ *   await batch.toPromise();
+ * } catch {
+ *   console.log('Cancelled or failed');
+ * }
+ * ```
+ * 
+ * @example Track progress
+ * ```typescript
+ * const operations = urls.map(url => 
  *   from(async function* () {
  *     yield `Fetching ${url}...`;
  *     return await fetch(url).then(r => r.json());
  *   })
  * );
  * 
- * // Generator foundation lets us see progress
- * for await (const status of all(futures)) {
- *   console.log(status);  // "Fetching http://...", actual data, ...
+ * // See progress from each operation
+ * for await (const update of all(operations)) {
+ *   console.log(update);
  * }
- * ```
- * 
- * @example Cancellation support from generators
- * ```typescript
- * const allFutures = all([future1, future2, future3]);
- * 
- * // Cancel all futures (generators support .return())
- * setTimeout(() => allFutures.cancel(), 1000);
  * ```
  */
 export function all<T, TReturn, TNext>(
@@ -78,18 +81,17 @@ export function all<T, TReturn, TNext>(
 }
 
 /**
- * Executes generator-based Futures concurrently, returning all settled results like `Promise.allSettled()`.
+ * Runs multiple async operations concurrently, returns results for all (even failures).
  * 
- * The async generator foundation enables unique capabilities: each Future's yields appear in the
- * result stream, and calling `.cancel()` on the returned Future propagates to all running generators.
- * Unlike Promise.allSettled, you can track progress and cancel even after starting.
+ * Like `Promise.allSettled()` - never rejects, always tells you what happened to each operation.
+ * With Futures, you can cancel the whole batch mid-flight and track progress.
  * 
- * Never rejects - always returns settled status for each Future. Accepts both Futures and Promises.
+ * Perfect for batch operations where some failures are acceptable.
  * 
- * @param futures - Generator-based Futures or Promises to execute
- * @returns Future yielding settled results with status and value/reason
+ * @param futures - Async operations (Futures or Promises) to run
+ * @returns Future with settled results (success or failure) for each operation
  * 
- * @example Promise-like usage
+ * @example Handle partial failures
  * ```typescript
  * import { allSettled, from } from "@okikio/future";
  * 
@@ -99,31 +101,33 @@ export function all<T, TReturn, TNext>(
  *   from(Promise.resolve(3))
  * ]).toPromise();
  * 
- * // All settled, even with failures
  * results.forEach(r => {
- *   if (r.status === "fulfilled") console.log(r.value);
+ *   if (r.status === "fulfilled") {
+ *     console.log('Success:', r.value);
+ *   } else {
+ *     console.error('Failed:', r.reason);
+ *   }
  * });
  * ```
  * 
- * @example Generator capabilities - progress and cancellation
+ * @example Batch processing with error tracking
  * ```typescript
- * const futures = ids.map(id => 
- *   from(async function* (abort) {
- *     yield `Processing ${id}...`;
- *     abort.signal.throwIfAborted();  // Cancellable
- *     return await processItem(id);
- *   })
+ * const operations = userIds.map(id => 
+ *   from(fetch(`/api/users/${id}`).then(r => r.json()))
  * );
  * 
- * const batch = allSettled(futures);
+ * const results = await allSettled(operations).toPromise();
+ * const succeeded = results.filter(r => r.status === "fulfilled");
  * 
- * // Track all yields (progress updates)
- * for await (const result of batch) {
- *   console.log(result);
- * }
+ * console.log(`Processed ${succeeded.length}/${results.length} successfully`);
+ * ```
  * 
- * // Or cancel mid-flight (generators can be stopped)
- * setTimeout(() => batch.cancel(), 5000);
+ * @example Cancellable batch
+ * ```typescript
+ * const batch = allSettled([...manyOperations]);
+ * 
+ * // Cancel the whole batch if needed
+ * setTimeout(() => batch.cancel(), 10000);
  * ```
  */
 export function allSettled<T, TReturn, TNext>(
@@ -146,16 +150,17 @@ export function allSettled<T, TReturn, TNext>(
 }
 
 /**
- * Returns the first generator-based Future to complete, like `Promise.race()`.
+ * Returns the first async operation to complete (success or failure).
  * 
- * The generator foundation means the returned Future can be cancelled (calling `.cancel()` will
- * propagate to all racing generators), and if any racing Future yields values, those appear in
- * the result stream before the final winner is determined.
+ * Like `Promise.race()` - whichever finishes first wins. With Futures, you can cancel
+ * the race mid-flight.
  * 
- * @param futures - Generator-based Futures or Promises to race
- * @returns Future resolving/rejecting with first completed result
+ * Perfect for timeout patterns, failover strategies, or taking the fastest response.
  * 
- * @example Simple timeout pattern
+ * @param futures - Async operations (Futures or Promises) to race
+ * @returns Future that completes with first result
+ * 
+ * @example Timeout pattern
  * ```typescript
  * import { race, from } from "@okikio/future";
  * 
@@ -167,26 +172,22 @@ export function allSettled<T, TReturn, TNext>(
  * ]).toPromise();
  * ```
  * 
- * @example Generator capabilities - yields and cancellation
+ * @example Fastest server wins
  * ```typescript
- * const racingFuture = race([
- *   from(async function* () {
- *     yield "Server 1 trying...";
- *     return await fetch('https://server1.com/data');
- *   }),
- *   from(async function* () {
- *     yield "Server 2 trying...";
- *     return await fetch('https://server2.com/data');
- *   })
- * ]);
+ * const result = await race([
+ *   from(fetch('https://server1.com/data')),
+ *   from(fetch('https://server2.com/data')),
+ *   from(fetch('https://server3.com/data'))
+ * ]).toPromise();
+ * // Uses whichever responds first
+ * ```
  * 
- * // See which server responds (generators let us track this)
- * for await (const update of racingFuture) {
- *   console.log(update);  // "Server 1 trying...", then winner's data
- * }
+ * @example Cancellable race
+ * ```typescript
+ * const racing = race([operation1, operation2, operation3]);
  * 
- * // Cancel the race (generators can be stopped)
- * setTimeout(() => racingFuture.cancel(), 2000);
+ * // Cancel the race if user navigates away
+ * window.addEventListener('beforeunload', () => racing.cancel());
  * ```
  */
 export function race<T, TReturn, TNext>(
@@ -202,28 +203,26 @@ export function race<T, TReturn, TNext>(
 }
 
 /**
- * Returns settled results for the first N generator-based Futures.
+ * Returns results for the first N async operations.
  * 
- * Slices the input array to take the first `count` Futures, then executes them with `allSettled()`.
- * The generator foundation enables cancellation and progress tracking even for partial execution.
+ * Takes the first `count` operations from the array and runs them with `allSettled()`.
+ * Useful when you want some results but not all.
  * 
- * @param futures - Generator-based Futures or Promises
- * @param count - Number of futures to execute (takes first N from array)
- * @returns Future yielding settled results for first N futures
+ * @param futures - Async operations (Futures or Promises)
+ * @param count - How many to execute (takes first N from array)
+ * @returns Future with settled results for first N operations
  * 
- * @example Load first 3 resources
+ * @example Sample subset of work
  * ```typescript
  * import { some, from } from "@okikio/future";
  * 
  * const mirrors = ['cdn1', 'cdn2', 'cdn3', 'cdn4', 'cdn5'].map(cdn =>
- *   from(async function* () {
- *     yield `Trying ${cdn}...`;
- *     return await fetch(`https://${cdn}.example.com/file.zip`);
- *   })
+ *   from(fetch(`https://${cdn}.example.com/file.zip`))
  * );
  * 
- * // Only first 3 mirrors (generators let us see which)
+ * // Only try first 3 mirrors
  * const results = await some(mirrors, 3).toPromise();
+ * const successful = results.filter(r => r.status === "fulfilled");
  * ```
  */
 export function some<T, TReturn, TNext>(
@@ -239,72 +238,71 @@ export function some<T, TReturn, TNext>(
 }
 
 /**
- * Limits concurrent execution of generator-based Futures.
+ * Runs async operations with a concurrency limit.
  * 
- * The async generator foundation is crucial here: maintains a dynamic pool where new generators
- * start as old ones complete via their return values. Each generator's yields appear in the output
- * stream, enabling real-time progress tracking. Calling `.cancel()` on the returned Future stops
- * all running generators via their `.return()` method.
+ * Controls how many operations run at once - as each finishes, the next starts. Essential
+ * for rate limiting, managing connection pools, or preventing resource exhaustion.
  * 
- * Essential for rate limiting, managing connection pools, or preventing resource exhaustion.
- * Unlike Promise-based throttling, generators provide fine-grained control and visibility.
+ * With Futures, you can track progress of each operation and cancel the whole batch.
  * 
- * @param futures - Generator-based Futures to execute with controlled concurrency
- * @param limit - Maximum number of generators running simultaneously
- * @returns Future yielding all intermediate values, returning array of final results
+ * @param futures - Async operations (Futures or Promises) to run
+ * @param limit - Maximum number running at once
+ * @returns Future that completes when all operations finish
  * 
- * @example Rate-limited API calls (Promise-like usage)
+ * @example Rate-limited API calls
  * ```typescript
  * import { withConcurrencyLimit, from } from "@okikio/future";
  * 
- * const futures = userIds.map(id =>
+ * const operations = userIds.map(id =>
  *   from(fetch(`/api/users/${id}`).then(r => r.json()))
  * );
  * 
- * // Only 5 concurrent requests (generators enforce this)
- * const users = await withConcurrencyLimit(futures, 5).toPromise();
+ * // Only 5 requests at a time
+ * const users = await withConcurrencyLimit(operations, 5).toPromise();
  * ```
  * 
- * @example Generator capabilities - progress and control
+ * @example Track progress
  * ```typescript
- * const futures = imagePaths.map(path =>
- *   from(async function* (abort) {
- *     yield `Processing ${path}...`;           // Progress update
- *     abort.signal.throwIfAborted();           // Cancellable
- *     
+ * const operations = imagePaths.map(path =>
+ *   from(async function* () {
+ *     yield `Processing ${path}...`;
  *     const image = await loadImage(path);
- *     yield `Loaded ${path}, processing...`;   // More progress
- *     
  *     const processed = await processImage(image);
- *     return `Completed ${path}`;              // Final result
+ *     await saveImage(processed);
+ *     return `Done: ${path}`;
  *   })
  * );
  * 
- * const batch = withConcurrencyLimit(futures, 3);
+ * const batch = withConcurrencyLimit(operations, 3);
  * 
- * // Track every yield from all generators
+ * // Track each operation's progress
  * for await (const status of batch) {
- *   console.log(status);  // Real-time progress!
+ *   updateUI(status);
  * }
- * 
- * // Or cancel mid-processing (stops all active generators)
- * setTimeout(() => batch.cancel(), 10000);
  * ```
  * 
- * @example Resource management via generator cleanup
+ * @example Cancellable batch processing
  * ```typescript
- * const futures = files.map(file =>
+ * const batch = withConcurrencyLimit(operations, 10);
+ * 
+ * // Cancel all (including queued operations)
+ * setTimeout(() => batch.cancel(), 30000);
+ * ```
+ * 
+ * @example Resource management
+ * ```typescript
+ * const operations = files.map(file =>
  *   from(async function* (_, disposables) {
  *     const handle = await Deno.open(file);
- *     disposables.use(handle);  // Auto-cleanup on completion/cancel
+ *     disposables.use(handle);  // Auto-cleanup
  *     
  *     yield `Reading ${file}...`;
  *     return await handle.readAll();
  *   })
  * );
  * 
- * // Only 2 files open at once, auto-cleanup via generators
- * await withConcurrencyLimit(futures, 2).toPromise();
+ * // Only 2 files open at once
+ * await withConcurrencyLimit(operations, 2).toPromise();
  * ```
  */
 export function withConcurrencyLimit<T, TReturn = T, TNext = unknown>(
