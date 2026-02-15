@@ -98,30 +98,111 @@ export function all<T, TReturn, TNext>(
 }
 
 /**
- * Executes multiple futures concurrently and yields their results or errors as soon as they settle.
- * This method works similarly to `Promise.allSettled` but yields results incrementally.
- *
- * @param futures - An iterable or async iterable of `Future` or `PromiseLike` objects.
- * @returns An AsyncIterable yielding each settled result.
- * @example
+ * Executes multiple futures concurrently and returns ALL settled results (both successes and failures).
+ * 
+ * ## What This Does
+ * 
+ * Unlike `all()` which fails if ANY future fails, `allSettled()` is the reliable friend who
+ * waits for everyone and tells you exactly what happened to each one - successes AND failures.
+ * 
+ * ### Key Characteristics:
+ * - **Never Rejects**: Always succeeds, even if some futures fail
+ * - **Complete Picture**: Returns status for every future (fulfilled or rejected)
+ * - **Fault Tolerant**: One failure doesn't stop the others
+ * - **Detailed Results**: Get both successful values and error reasons
+ * 
+ * ### When to Use:
+ * - Batch operations where some failures are acceptable
+ * - Multiple independent API calls where partial success is useful
+ * - Data synchronization where you need to know what succeeded/failed
+ * - Cleanup operations where you want to try everything
+ * 
+ * ## Result Structure
+ * 
+ * Each result is one of:
  * ```typescript
- * const futureSettled = Future.allSettled([
- *   Future.from(async function* () {
- *     yield 42;
- *     return 100;
- *   }),
- *   Future.from(async function* () {
- *     yield 10;
- *     return 20;
- *   })
- * ]);
- *
- * for await (const result of futureSettled) {
+ * // Success
+ * { status: "fulfilled", value: T }
+ * 
+ * // Failure
+ * { status: "rejected", reason: Error }
+ * ```
+ * 
+ * @param futures - An iterable of `Future` or `PromiseLike` objects
+ * @returns A Future yielding settled results with status and value/reason
+ * 
+ * @example Basic usage with mixed results
+ * ```typescript
+ * import { allSettled, from } from "@okikio/future";
+ * 
+ * const results = await allSettled([
+ *   from(Promise.resolve(1)),
+ *   from(Promise.reject(new Error("Failed!"))),
+ *   from(Promise.resolve(3))
+ * ]).toPromise();
+ * 
+ * results.forEach((result, index) => {
  *   if (result.status === "fulfilled") {
- *     console.log(result.value); // Outputs 100 and 20
+ *     console.log(`Task ${index}: Success -`, result.value);
  *   } else {
- *     console.error(result.reason);
+ *     console.error(`Task ${index}: Failed -`, result.reason);
  *   }
+ * });
+ * 
+ * // Output:
+ * // Task 0: Success - 1
+ * // Task 1: Failed - Error: Failed!
+ * // Task 2: Success - 3
+ * ```
+ * 
+ * @example Batch API calls with error handling
+ * ```typescript
+ * const userIds = [1, 2, 999, 4]; // 999 doesn't exist
+ * 
+ * const futures = userIds.map(id => 
+ *   from(fetch(`/api/users/${id}`).then(r => r.json()))
+ * );
+ * 
+ * const results = await allSettled(futures).toPromise();
+ * 
+ * const succeeded = results.filter(r => r.status === "fulfilled");
+ * const failed = results.filter(r => r.status === "rejected");
+ * 
+ * console.log(`Loaded ${succeeded.length} users`);
+ * console.log(`Failed to load ${failed.length} users`);
+ * ```
+ * 
+ * @example File processing with partial failures
+ * ```typescript
+ * const files = ['file1.txt', 'missing.txt', 'file3.txt'];
+ * 
+ * const futures = files.map(file => 
+ *   from(Deno.readTextFile(file))
+ * );
+ * 
+ * for await (const result of allSettled(futures)) {
+ *   if (result.status === "fulfilled") {
+ *     processFileContent(result.value);
+ *   } else {
+ *     logError(`File read failed: ${result.reason}`);
+ *   }
+ * }
+ * ```
+ * 
+ * @example Cleanup operations
+ * ```typescript
+ * // Close all connections, log failures
+ * const connections = [db1, db2, db3];
+ * 
+ * const futures = connections.map(conn => 
+ *   from(conn.close())
+ * );
+ * 
+ * const results = await allSettled(futures).toPromise();
+ * 
+ * const failedCloses = results.filter(r => r.status === "rejected");
+ * if (failedCloses.length > 0) {
+ *   console.warn(`${failedCloses.length} connections failed to close properly`);
  * }
  * ```
  */
@@ -235,11 +316,111 @@ export function race<T, TReturn, TNext>(
 }
 
 /**
- * Executes multiple Futures concurrently, but only returns results for the first `count` Futures.
- *
- * @param futures - An iterable or async iterable of `Future` or `PromiseLike` objects.
- * @param count - The number of Futures to resolve before yielding results.
- * @returns An AsyncIterable yielding the first `count` resolved results.
+ * Gets results from the first N futures to complete, useful for "best of N" scenarios.
+ * 
+ * ## What This Does
+ * 
+ * Think of it as a race where you only care about the top N finishers. Perfect for when you
+ * need multiple results but don't want to wait for ALL futures to complete.
+ * 
+ * ### Key Characteristics:
+ * - **Partial Results**: Get first N results, ignore the rest
+ * - **Faster Than All**: Don't wait for slow stragglers
+ * - **Maintains Order**: Results in input order (uses `allSettled` under the hood)
+ * - **Includes Failures**: Returns settled results (both successes and failures)
+ * 
+ * ### When to Use:
+ * - Load balancing across mirrors (first 3 successful downloads)
+ * - Redundant requests (whichever 2 respond first)
+ * - Sampling (test first 5 servers, not all 100)
+ * - Quick validation (need confirmation from 2 out of 5 sources)
+ * 
+ * ## How It Works
+ * 
+ * ```
+ * Input: [F1, F2, F3, F4, F5], count=3
+ * 
+ * Takes first 3: [F1, F2, F3]
+ * Ignores rest: [F4, F5]
+ * 
+ * Returns settled results of [F1, F2, F3]
+ * ```
+ * 
+ * @param futures - An iterable of `Future` or `PromiseLike` objects
+ * @param count - Number of futures to wait for (takes first N from array)
+ * @returns A Future yielding the first `count` settled results
+ * 
+ * @example Get first 3 results
+ * ```typescript
+ * import { some, from } from "@okikio/future";
+ * 
+ * const mirrors = [
+ *   'cdn1.example.com',
+ *   'cdn2.example.com',
+ *   'cdn3.example.com',
+ *   'cdn4.example.com',
+ *   'cdn5.example.com'
+ * ];
+ * 
+ * const futures = mirrors.map(url => 
+ *   from(fetch(`https://${url}/file.zip`))
+ * );
+ * 
+ * // Only wait for first 3
+ * const results = await some(futures, 3).toPromise();
+ * 
+ * const successful = results.filter(r => r.status === "fulfilled");
+ * console.log(`Got ${successful.length} successful downloads`);
+ * ```
+ * 
+ * @example Redundant API calls
+ * ```typescript
+ * // Call 5 servers, use first 2 responses
+ * const servers = ['us', 'eu', 'asia', 'au', 'sa'];
+ * 
+ * const futures = servers.map(region => 
+ *   from(fetch(`https://api-${region}.example.com/data`))
+ * );
+ * 
+ * const firstTwo = await some(futures, 2).toPromise();
+ * 
+ * // Use whichever 2 responded (even if others faster)
+ * for (const result of firstTwo) {
+ *   if (result.status === "fulfilled") {
+ *     processData(result.value);
+ *   }
+ * }
+ * ```
+ * 
+ * @example Sampling check
+ * ```typescript
+ * // Test 5 out of 100 servers
+ * const allServers = [...]; // 100 servers
+ * const sampleSize = 5;
+ * 
+ * const futures = allServers.map(server => 
+ *   from(healthCheck(server))
+ * );
+ * 
+ * const sample = await some(futures, sampleSize).toPromise();
+ * 
+ * const healthy = sample.filter(r => 
+ *   r.status === "fulfilled" && r.value.ok
+ * );
+ * 
+ * console.log(`${healthy.length}/${sampleSize} servers healthy`);
+ * ```
+ * 
+ * @example Handle edge cases
+ * ```typescript
+ * // If count > array length, returns all
+ * const results = await some([f1, f2], 10).toPromise();
+ * // Returns 2 results, not 10
+ * 
+ * // If count = 0, returns empty array
+ * const empty = await some([f1, f2], 0).toPromise();
+ * // Returns []
+ * ```
  */
 export function some<T, TReturn, TNext>(
   futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<T | TReturn>>,
@@ -254,134 +435,220 @@ export function some<T, TReturn, TNext>(
 }
 
 /**
- * Executes an iterable of `Future` objects with a limit on the number of concurrent operations.
- * This function dynamically manages a set of running `Future` operations, ensuring that no more than
- * the specified `limit` of `Future` objects are running at any given time. As each `Future` completes,
- * the function continues to yield results, maintaining the concurrency level by starting the next `Future`
- * from the iterable.
- *
- * Once all `Future` operations are completed, it returns an array of the final results of each `Future` (in the order of completion).
- *
- * @template T - The type yielded by the `Future` iterators.
- * @template TReturn - The return type of the `Future` iterators.
- * @template TNext - The type passed back to the `Future` iterators when calling `next`.
- * @param futures - An iterable of `Future` objects.
- * @param limit - The maximum number of `Future` operations to run concurrently.
- * @returns A `Future` that yields intermediate results as they become available, and finally returns an array of the final results (in the order of completion).
- *
- * @example
+ * Controls concurrent execution by limiting how many futures can run simultaneously.
+ * 
+ * ## What This Does
+ * 
+ * Imagine a restaurant with limited tables - `withConcurrencyLimit()` is like the host who ensures
+ * you never seat more than N parties at once. As parties leave (futures complete), new ones are
+ * seated (new futures start), maintaining steady throughput without overwhelming resources.
+ * 
+ * ### The Concurrency Problem
+ * 
+ * Running too many operations at once can:
+ * - Overwhelm servers (rate limiting, timeouts)
+ * - Exhaust memory (too many pending requests)
+ * - Trigger resource limits (open file handles, connections)
+ * - Cause browser tab crashes (too many network requests)
+ * 
+ * ### Key Characteristics:
+ * - **Dynamic Pool**: Maintains exactly `limit` active futures (or fewer near the end)
+ * - **Queue Management**: Automatically starts new futures as old ones complete
+ * - **Resource Friendly**: Prevents overwhelming system resources
+ * - **Progress Tracking**: Yields intermediate values as futures execute
+ * - **Completion Order**: Final results in order of completion (not input order)
+ * 
+ * ### When to Use:
+ * - API rate limiting (e.g., "max 5 requests/second")
+ * - Batch file processing (prevent too many open files)
+ * - Database connection pools (limited connections)
+ * - Resource-intensive operations (image processing, video encoding)
+ * - Preventing browser tab crashes (too many simultaneous fetches)
+ * 
+ * ## Concurrency Visualization
+ * 
+ * ```
+ * Limit = 2, 5 total futures:
+ * 
+ * Time →
+ * F1: [====]
+ * F2: [=====]
+ * F3:       [===]    ← Waits for F1
+ * F4:            [====] ← Waits for F2
+ * F5:                [==] ← Waits for F3
+ * 
+ * Never more than 2 running at once!
+ * ```
+ * 
+ * ## How It Works (Step by Step)
+ * 
+ * 1. Start first `limit` futures immediately
+ * 2. When any future completes:
+ *    - Yield its intermediate values
+ *    - Store its final result
+ *    - Start the next queued future
+ * 3. Repeat until all futures complete
+ * 4. Return array of all final results
+ * 
+ * @template T - The type yielded by futures during execution
+ * @template TReturn - The type returned by futures when complete
+ * @template TNext - The type for pull-based iteration (advanced)
+ * 
+ * @param futures - An iterable of `Future` objects to execute
+ * @param limit - Maximum number of futures to run concurrently
+ * @returns A Future yielding intermediate values and returning final results array
+ * 
+ * @example Rate-limited API calls
  * ```typescript
- * const futures = [
- *   Future.from(async function* () {
- *     yield 42;
- *     return 100;
- *   }),
- *   Future.from(async function* () {
- *     yield 10;
- *     return 20;
+ * import { withConcurrencyLimit, from } from "@okikio/future";
+ * 
+ * // 100 API calls, but only 5 at a time
+ * const userIds = Array.from({ length: 100 }, (_, i) => i + 1);
+ * 
+ * const futures = userIds.map(id =>
+ *   from(async function* () {
+ *     yield `Fetching user ${id}...`;
+ *     const response = await fetch(`/api/users/${id}`);
+ *     return await response.json();
  *   })
- * ];
- *
- * const limitedFuture = withConcurrencyLimit(futures, 2);
- *
- * // Yield intermediate results
- * for await (const value of limitedFuture) {
- *   console.log(value); // Logs 42 and 10 as they are yielded
+ * );
+ * 
+ * // Only 5 concurrent requests at any time
+ * const limited = withConcurrencyLimit(futures, 5);
+ * 
+ * // Monitor progress
+ * for await (const status of limited) {
+ *   console.log(status); // "Fetching user 1...", etc.
  * }
- *
- * // Get the final results
- * const finalResults = await limitedFuture.toPromise();
- * console.log(finalResults); // Logs [100, 20], which are the final results of the futures.
+ * 
+ * const allUsers = await limited.toPromise();
+ * console.log(`Loaded ${allUsers.length} users`);
  * ```
- *
- * @example
+ * 
+ * @example File processing with memory limits
  * ```typescript
- * // Simulating I/O-bound tasks
- * const simulateIO = (duration: number) =>
- *   Future.from(async function* () {
- *     yield `Starting task for ${duration}ms`;
- *     await new Promise(resolve => setTimeout(resolve, duration));
- *     return `Completed task for ${duration}ms`;
- *   });
- *
- * const futures = [
- *   simulateIO(500),
- *   simulateIO(1000),
- *   simulateIO(200),
- *   simulateIO(800),
- *   simulateIO(300)
+ * // Process 1000 images, 3 at a time (memory constraint)
+ * const imagePaths = [...]; // 1000 paths
+ * 
+ * const futures = imagePaths.map(path =>
+ *   from(async function* () {
+ *     yield `Processing ${path}...`;
+ *     
+ *     const image = await loadImage(path);
+ *     const processed = await processImage(image);
+ *     await saveImage(processed);
+ *     
+ *     return `Completed ${path}`;
+ *   })
+ * );
+ * 
+ * // Only 3 images in memory at once
+ * const results = await withConcurrencyLimit(futures, 3).toPromise();
+ * console.log('All images processed');
+ * ```
+ * 
+ * @example Database operations with connection pool
+ * ```typescript
+ * // Database has 10 connection limit
+ * const queries = [
+ *   'SELECT * FROM users',
+ *   'SELECT * FROM posts',
+ *   'SELECT * FROM comments',
+ *   // ... 100 queries
  * ];
- *
- * const limitedFuture = withConcurrencyLimit(futures, 2);
- *
- * // Yield intermediate results
- * for await (const value of limitedFuture) {
- *   console.log(value); // Logs the starting messages as they are yielded
- * }
- *
- * // Get the final results
- * const finalResults = await limitedFuture.toPromise();
- * console.log(finalResults); // Logs the completion messages in the order of completion
+ * 
+ * const futures = queries.map(sql =>
+ *   from(async function* () {
+ *     yield `Executing: ${sql}`;
+ *     const result = await db.query(sql);
+ *     return result.rows;
+ *   })
+ * );
+ * 
+ * // Respect connection pool limit
+ * const limited = withConcurrencyLimit(futures, 8); // 8 < 10 (safety margin)
+ * 
+ * const allResults = await limited.toPromise();
  * ```
- *
- * @example
+ * 
+ * @example Web scraping with politeness
  * ```typescript
- * // Handling API requests with concurrency control
- * const apiRequest = (url: string) =>
- *   Future.from(async function* () {
- *     yield `Fetching ${url}`;
+ * // Scrape 1000 pages from a website
+ * // Limit to 2 concurrent requests to be polite
+ * const urls = [...]; // 1000 URLs
+ * 
+ * const futures = urls.map(url =>
+ *   from(async function* () {
+ *     yield `Scraping ${url}...`;
+ *     
  *     const response = await fetch(url);
- *     const data = await response.json();
+ *     const html = await response.text();
+ *     const data = parseHTML(html);
+ *     
+ *     // Respect robots.txt delay
+ *     await new Promise(resolve => setTimeout(resolve, 1000));
+ *     
  *     return data;
- *   });
- *
- * const futures = [
- *   apiRequest('https://api.example.com/1'),
- *   apiRequest('https://api.example.com/2'),
- *   apiRequest('https://api.example.com/3'),
- *   apiRequest('https://api.example.com/4'),
- *   apiRequest('https://api.example.com/5')
- * ];
- *
- * const limitedFuture = withConcurrencyLimit(futures, 3);
- *
- * // Yield intermediate results
- * for await (const value of limitedFuture) {
- *   console.log(value); // Logs the fetching messages as they are yielded
- * }
- *
- * // Get the final results
- * const finalResults = await limitedFuture.toPromise();
- * console.log(finalResults); // Logs the data fetched from the APIs as an array
+ *   })
+ * );
+ * 
+ * // Only 2 concurrent requests (be nice to servers!)
+ * const results = await withConcurrencyLimit(futures, 2).toPromise();
  * ```
- *
- * @example
+ * 
+ * @example Progress tracking with limit
  * ```typescript
- * // Performing file operations with concurrency control
- * const readFile = (path: string) =>
- *   Future.from(async function* () {
- *     yield `Reading file: ${path}`;
- *     const content = await Deno.readTextFile(path);
- *     return content;
- *   });
- *
- * const futures = [
- *   readFile('/path/to/file1.txt'),
- *   readFile('/path/to/file2.txt'),
- *   readFile('/path/to/file3.txt'),
- *   readFile('/path/to/file4.txt')
- * ];
- *
- * const limitedFuture = withConcurrencyLimit(futures, 2);
- *
- * // Yield intermediate results
- * for await (const value of limitedFuture) {
- *   console.log(value); // Logs the reading messages as they are yielded
+ * const futures = items.map(item =>
+ *   from(async function* () {
+ *     yield { status: 'processing', item };
+ *     const result = await process(item);
+ *     return { status: 'complete', item, result };
+ *   })
+ * );
+ * 
+ * let completed = 0;
+ * const total = items.length;
+ * 
+ * const limited = withConcurrencyLimit(futures, 10);
+ * 
+ * for await (const update of limited) {
+ *   if (update.status === 'processing') {
+ *     console.log(`Progress: ${completed}/${total}`);
+ *   }
  * }
- *
- * // Get the final results
- * const finalResults = await limitedFuture.toPromise();
- * console.log(finalResults); // Logs the contents of the files as an array
+ * 
+ * const final = await limited.toPromise();
+ * console.log('All complete!', final);
+ * ```
+ * 
+ * ## Performance Comparison
+ * 
+ * For 10 futures that each take 1 second:
+ * - **Sequential** (limit=1): ~10 seconds
+ * - **Limited** (limit=3): ~4 seconds
+ * - **Unlimited** (all()): ~1 second (but may crash!)
+ * 
+ * Choose limit based on:
+ * - Server rate limits
+ * - Memory constraints
+ * - Connection pools
+ * - CPU cores
+ * - Network bandwidth
+ * 
+ * ## Common Patterns
+ * 
+ * ```typescript
+ * // API rate limit: 10 requests/second
+ * withConcurrencyLimit(futures, 10)
+ * 
+ * // CPU-bound: Number of cores
+ * withConcurrencyLimit(futures, navigator.hardwareConcurrency || 4)
+ * 
+ * // Memory-bound: Conservative limit
+ * withConcurrencyLimit(futures, 5)
+ * 
+ * // Connection pool: 80% of max
+ * withConcurrencyLimit(futures, Math.floor(maxConnections * 0.8))
  * ```
  */
 export function withConcurrencyLimit<T, TReturn = T, TNext = unknown>(
