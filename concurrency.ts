@@ -2,13 +2,85 @@ import { useDisposableStack } from "./disposal.ts";
 import { Future } from "./future.ts";
 
 /**
- * Runs multiple Futures concurrently, yielding their results as they all complete.
- *
- * This is similar to `Promise.all` but with support for yielding results in sequence
- * once all the futures have been resolved.
- *
- * @param futures - An iterable of `Future` or `PromiseLike` objects.
- * @returns An AsyncIterable yielding each result as they complete.
+ * Runs multiple Futures concurrently and waits for all to complete, similar to `Promise.all()`.
+ * 
+ * ## What This Does
+ * 
+ * Think of `all()` as running multiple tasks at the same time and collecting all their results.
+ * Like sending multiple HTTP requests in parallel instead of one-by-one - much faster!
+ * 
+ * ### Key Characteristics:
+ * - **Concurrent Execution**: All futures start immediately and run in parallel
+ * - **All or Nothing**: If any future rejects, the entire operation fails (like `Promise.all`)
+ * - **Order Preserved**: Results are returned in the same order as input, regardless of completion order
+ * - **Yields Incrementally**: Each result is yielded as it completes, then all are returned together
+ * 
+ * ### When to Use:
+ * - Fetching multiple independent API endpoints
+ * - Processing multiple files in parallel
+ * - Running multiple database queries concurrently
+ * - Any scenario where you need all results and want maximum speed
+ * 
+ * ## Understanding Concurrency
+ * 
+ * ```
+ * Sequential (slow):        Concurrent (fast):
+ * Task A: [====]            Task A: [====]
+ * Task B:       [====]      Task B: [====]
+ * Task C:             [==]  Task C: [==]
+ * Total: ~10s               Total: ~4s
+ * ```
+ * 
+ * @param futures - An iterable of `Future` or `PromiseLike` objects to execute concurrently
+ * @returns A Future that yields each completed result, then returns an array of all results in order
+ * 
+ * @example Basic usage
+ * ```typescript
+ * import { all, from } from "@okikio/future";
+ * 
+ * const futures = [
+ *   from(fetch('/api/users')),
+ *   from(fetch('/api/posts')),
+ *   from(fetch('/api/comments'))
+ * ];
+ * 
+ * const results = await all(futures).toPromise();
+ * console.log(results); // [users, posts, comments] in order
+ * ```
+ * 
+ * @example Monitoring progress
+ * ```typescript
+ * const futures = urls.map(url => from(fetch(url)));
+ * 
+ * for await (const result of all(futures)) {
+ *   console.log('Got result:', result);
+ * }
+ * ```
+ * 
+ * @example With different types
+ * ```typescript
+ * const results = await all([
+ *   from(Promise.resolve(42)),
+ *   from(Promise.resolve("hello")),
+ *   from(Promise.resolve(true))
+ * ]).toPromise();
+ * 
+ * // results: [42, "hello", true]
+ * ```
+ * 
+ * @example Error handling
+ * ```typescript
+ * try {
+ *   await all([
+ *     from(Promise.resolve(1)),
+ *     from(Promise.reject(new Error("Failed!"))),
+ *     from(Promise.resolve(3))
+ *   ]).toPromise();
+ * } catch (error) {
+ *   console.error("One future failed:", error);
+ *   // The whole operation fails
+ * }
+ * ```
  */
 export function all<T, TReturn, TNext>(
   futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<T | TReturn>>,
@@ -73,10 +145,82 @@ export function allSettled<T, TReturn, TNext>(
 }
 
 /**
- * Returns the first settled Future, similar to `Promise.race`.
- *
- * @param futures - An iterable or async iterable of `Future` or `PromiseLike` objects.
- * @returns An AsyncIterable yielding the first result that resolves.
+ * Returns the first Future to complete (resolve or reject), like a race between competitors.
+ * 
+ * ## What This Does
+ * 
+ * Imagine multiple runners starting a race - `race()` gives you the result of whoever crosses
+ * the finish line first, whether they succeed or fail. The others keep running but you don't
+ * wait for them.
+ * 
+ * ### Key Characteristics:
+ * - **First Wins**: Returns as soon as ANY future completes (success or failure)
+ * - **Fast Response**: Perfect for timeout scenarios or fallback strategies
+ * - **Others Continue**: Losing futures keep running (but you don't wait for them)
+ * - **No Guarantee**: Could be success or error depending on which finishes first
+ * 
+ * ### When to Use:
+ * - Request timeout fallbacks (try primary, fallback to secondary)
+ * - CDN failover (fastest server wins)
+ * - User responsiveness (show loading spinner after 200ms)
+ * - Multiple data sources (use whichever responds first)
+ * 
+ * ## Race Visualization
+ * 
+ * ```
+ * Future A: [========] (slow)
+ * Future B: [===] (fast - wins!)
+ * Future C: [======] (medium)
+ * 
+ * Result: B's value returned immediately
+ * ```
+ * 
+ * @param futures - An iterable of `Future` or `PromiseLike` objects to race
+ * @returns A Future that resolves/rejects with the first future to complete
+ * 
+ * @example Request with timeout
+ * ```typescript
+ * import { race, from } from "@okikio/future";
+ * 
+ * const dataFuture = from(fetch('/api/data'));
+ * const timeoutFuture = from(new Promise((_, reject) => 
+ *   setTimeout(() => reject(new Error('Timeout!')), 5000)
+ * ));
+ * 
+ * try {
+ *   const result = await race([dataFuture, timeoutFuture]).toPromise();
+ *   console.log('Got data:', result);
+ * } catch (error) {
+ *   console.error('Request timed out or failed');
+ * }
+ * ```
+ * 
+ * @example CDN fallback
+ * ```typescript
+ * const result = await race([
+ *   from(fetch('https://cdn1.example.com/image.jpg')),
+ *   from(fetch('https://cdn2.example.com/image.jpg')),
+ *   from(fetch('https://cdn3.example.com/image.jpg'))
+ * ]).toPromise();
+ * 
+ * // Uses whichever CDN responds first
+ * ```
+ * 
+ * @example Loading spinner after delay
+ * ```typescript
+ * const loadingFuture = from(new Promise(resolve => 
+ *   setTimeout(() => resolve('show-spinner'), 200)
+ * ));
+ * 
+ * const dataFuture = from(fetchData());
+ * 
+ * const result = await race([loadingFuture, dataFuture]).toPromise();
+ * 
+ * if (result === 'show-spinner') {
+ *   showSpinner();
+ *   await dataFuture.toPromise();
+ * }
+ * ```
  */
 export function race<T, TReturn, TNext>(
   futures: Iterable<Future<T, TReturn, TNext> | PromiseLike<T | TReturn>>,
